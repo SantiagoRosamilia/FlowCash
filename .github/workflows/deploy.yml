@@ -13,18 +13,14 @@ name: Deploy FlowCash a GitHub Pages
 on:
   push:
     branches:
-      - main   # se activa cada vez que pusheás a main
-
-  # También podés dispararlo manualmente desde la pestaña "Actions" de GitHub
+      - main
   workflow_dispatch:
 
-# Permisos necesarios para que Actions pueda escribir en GitHub Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Evita deploys simultáneos si pusheas dos veces seguidas rápido
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -34,36 +30,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Descarga el código del repositorio
       - name: Checkout del repositorio
         uses: actions/checkout@v4
 
-      # 2. Configura Node.js 20 (versión LTS estable)
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'   # cachea node_modules para que futuras builds sean más rápidas
+          cache: 'npm'
 
-      # 3. Instala todas las dependencias (react, recharts, lucide, vite, etc.)
       - name: Instalar dependencias
         run: npm install
 
-      # 4. Construye la app — genera la carpeta /dist con los archivos finales
       - name: Construir FlowCash
         run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
-      # 5. Prepara los archivos para GitHub Pages
       - name: Preparar GitHub Pages
         uses: actions/configure-pages@v5
 
-      # 6. Sube los archivos construidos
       - name: Subir archivos
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'   # carpeta que genera Vite
+          path: './dist'
 
-      # 7. Publica en GitHub Pages — acá aparece la URL pública
       - name: Publicar en GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
