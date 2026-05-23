@@ -1,0 +1,19 @@
+# Dependencias — se regeneran con npm install
+node_modules/
+
+# Archivos de build — GitHub Actions los genera solo
+dist/
+
+# Variables de entorno — nunca subir
+.env
+.env.local
+.env.production
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
