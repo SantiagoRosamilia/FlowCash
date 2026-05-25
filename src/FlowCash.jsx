@@ -683,6 +683,11 @@ function AppContent({ session, onLogout }) {
     @keyframes ti{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
     select.input-fc option{background:#1E293B;}
     input[type=date].input-fc::-webkit-calendar-picker-indicator{filter:invert(.5);}
+    /* Mobile: fecha más compacta para evitar superposición con fuente */
+    @media(max-width:420px){
+      .date-source-grid{grid-template-columns:1fr!important;}
+      .date-input-wrap input[type=date]{font-size:12px;padding:10px 8px;}
+    }
     .overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;
       justify-content:center;padding:16px 20px;background:rgba(0,0,0,.8);backdrop-filter:blur(6px);}
     .wrap{max-width:1180px;margin:0 auto;padding:16px 20px 96px;}
@@ -812,8 +817,7 @@ function AppContent({ session, onLogout }) {
         <div style={{display:"flex",gap:3,maxWidth:1180,margin:"0 auto"}}>
           {[{id:"dashboard",label:"Dashboard",Icon:LayoutDashboard},
             {id:"charts",   label:"Gráficos", Icon:BarChart2},
-            {id:"records",  label:"Registros",Icon:List},
-            {id:"guide",    label:"Guía APIs", Icon:BookOpen}].map(({id,label,Icon:Ic})=>(
+            {id:"records",  label:"Registros",Icon:List}].map(({id,label,Icon:Ic})=>(
             <button key={id} className={`tab-btn ${tab===id?"tab-active":""}`} onClick={()=>setTab(id)}>
               <Ic size={16}/><span>{label}</span>
             </button>
@@ -1000,52 +1004,6 @@ function AppContent({ session, onLogout }) {
                 )}
               </div>
 
-              {/* Wallet sync */}
-              <div className="card">
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                  <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Billeteras Digitales</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Sincronización vía API</p>
-                  </div>
-                  <div style={{display:"flex",gap:5}}>
-                    {["#00BCFF","#FFD700"].map((c,i)=>(
-                      <div key={i} style={{width:9,height:9,borderRadius:"50%",background:c}}/>
-                    ))}
-                  </div>
-                </div>
-                {syncing && (
-                  <div style={{marginBottom:12,padding:"10px 12px",background:"#1E293B",borderRadius:10}}>
-                    {SYNC_STEPS.map((s,i)=>(
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",
-                          fontSize:12,color:i<=syncStep?"#94A3B8":"#334155"}}>
-                        {i<syncStep?<CheckCircle size={13} color="#34D399"/>
-                         :i===syncStep?<RefreshCw size={13} color="#818CF8" style={{animation:"spin 1s linear infinite"}}/>
-                         :<div style={{width:13,height:13,borderRadius:"50%",border:"1px solid #334155"}}/>}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:12}}>
-                  {Object.entries(WALLETS).filter(([k])=>k!=="manual").map(([k,w])=>(
-                    <span key={k} className="badge" style={{background:w.color+"18",color:w.color,border:`1px solid ${w.color}30`}}>
-                      {w.label}
-                    </span>
-                  ))}
-                </div>
-                <button onClick={simulateAPI} disabled={apiDone||syncing}
-                  style={{width:"100%",padding:"11px",borderRadius:12,fontSize:13,fontWeight:600,
-                    cursor:(apiDone||syncing)?"default":"pointer",border:"1px solid",fontFamily:"inherit",
-                    display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .2s",
-                    background:apiDone?"rgba(52,211,153,.08)":"rgba(99,102,241,.1)",
-                    color:apiDone?"#34D399":"#818CF8",
-                    borderColor:apiDone?"rgba(52,211,153,.25)":"rgba(99,102,241,.3)"}}>
-                  {syncing?<><RefreshCw size={14} style={{animation:"spin 1s linear infinite"}}/> Sincronizando…</>
-                   :apiDone?<><CheckCircle size={14}/> 8 movimientos importados</>
-                           :<><RefreshCw size={14}/> Simular importación de APIs</>}
-                </button>
-              </div>
-
               {/* Recent */}
               <div className="card" style={{padding:0,overflow:"hidden"}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px 12px"}}>
@@ -1140,7 +1098,8 @@ function AppContent({ session, onLogout }) {
                 <div className="card">
                   <p style={{fontSize:13,fontWeight:700,marginBottom:18}}>Distribución por Fuente</p>
                   {walletTotals.length===0 ? (
-                    <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>
+                    <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13,
+                        minHeight:220,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       Sin movimientos registrados
                     </div>
                   ) : (
@@ -1624,8 +1583,8 @@ function AppContent({ session, onLogout }) {
             </div>
 
             {/* Date + Source */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:form.source==="digital"?10:20}}>
-              <div>
+            <div className="date-source-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:form.source==="digital"?10:20}}>
+              <div className="date-input-wrap">
                 <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FECHA</label>
                 <input type="date" className="input-fc" value={form.date}
                   onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
