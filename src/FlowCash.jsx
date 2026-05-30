@@ -1,169 +1,361 @@
+// FlowCash — Diseño nuevo (Claude Design) + Funcionalidad completa (backend, auth, wallets)
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList, Legend,
 } from "recharts";
-import {
-  Plus, TrendingUp, TrendingDown, Wallet, LayoutDashboard, BarChart2,
-  List, X, ShoppingCart, Car, Coffee, Heart, Shirt, Zap, DollarSign,
-  Briefcase, ArrowUpRight, ChevronRight, RefreshCw, CheckCircle,
-  Search, Key, Info, BookOpen, Smartphone, Trash2, Shield,
-  Banknote, CreditCard, LogOut, User, Mail, Lock, Eye, EyeOff,
-  AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff,
-} from "lucide-react";
-import { authApi, txApi, mpApi } from './api.js';
+import { authApi, txApi, walletApi } from './api.js';
 
-/* ─── Session storage (solo email para mostrar en UI) ───────
-   El JWT vive en api.js — nunca lo tocamos acá directamente.
-   Solo guardamos el email del usuario para mostrarlo en el header.
-─────────────────────────────────────────────────────────── */
-const SESSION_KEY = 'fc_session_v1';
-const loadSession = () => JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
-const saveSession = s  => sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
-const clearSession= () => { sessionStorage.removeItem(SESSION_KEY); authApi.logout(); };
+/* ═══════════════════════════════════════════════════════════
+   DESIGN TOKENS — del handoff de Claude Design
+   Aplicados como CSS variables + constantes JS
+═══════════════════════════════════════════════════════════ */
+const GLOBAL_CSS = `
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
-/* ─── Constants ─────────────────────────────────────────── */
-const EXPENSE_CATS = ["Alimentación","Transporte","Entretenimiento","Salud","Ropa","Servicios","Otros"];
-const INCOME_CATS  = ["Sueldo","Freelance","Inversiones","Transferencia","Otros"];
-const CAT_META = {
-  Alimentación:    { Icon: ShoppingCart, color: "#34D399" },
-  Transporte:      { Icon: Car,          color: "#60A5FA" },
-  Entretenimiento: { Icon: Coffee,       color: "#A78BFA" },
-  Salud:           { Icon: Heart,        color: "#F472B6" },
-  Ropa:            { Icon: Shirt,        color: "#FB923C" },
-  Servicios:       { Icon: Zap,          color: "#FBBF24" },
-  Otros:           { Icon: DollarSign,   color: "#94A3B8" },
-  Sueldo:          { Icon: Briefcase,    color: "#34D399" },
-  Freelance:       { Icon: Smartphone,   color: "#60A5FA" },
-  Inversiones:     { Icon: TrendingUp,   color: "#A78BFA" },
-  Transferencia:   { Icon: ArrowUpRight, color: "#FBBF24" },
-};
-const WALLETS = {
-  manual:      { label:"Efectivo",     color:"#34D399", Icon: Banknote   },
-  mercadopago: { label:"Mercado Pago", color:"#00BCFF", Icon: CreditCard },
-  lemoncash:   { label:"Lemon Cash",   color:"#FFD700", Icon: Smartphone },
-};
-const MOCK_API = [
-  { id:"mp1", type:"expense", amount:2850,  category:"Alimentación",    description:"Supermercado Dia",      date:"2025-07-10", source:"digital", wallet:"mercadopago", recurring:false },
-  { id:"mp2", type:"expense", amount:1200,  category:"Transporte",      description:"SUBE - recarga",        date:"2025-07-09", source:"digital", wallet:"mercadopago", recurring:false },
-  { id:"mp3", type:"income",  amount:45000, category:"Transferencia",   description:"Transferencia recibida",date:"2025-07-08", source:"digital", wallet:"mercadopago", recurring:false },
-  { id:"mp4", type:"expense", amount:3500,  category:"Entretenimiento", description:"Netflix + Spotify",     date:"2025-07-07", source:"digital", wallet:"mercadopago", recurring:true, dueDay:7  },
-  { id:"mp5", type:"expense", amount:980,   category:"Alimentación",    description:"McDonalds QR",          date:"2025-07-06", source:"digital", wallet:"mercadopago", recurring:false },
-  { id:"lc1", type:"income",  amount:12000, category:"Inversiones",     description:"Rendimiento DAI 8%",    date:"2025-07-10", source:"digital", wallet:"lemoncash",   recurring:false },
-  { id:"lc2", type:"expense", amount:800,   category:"Servicios",       description:"Comisión plataforma",   date:"2025-07-06", source:"digital", wallet:"lemoncash",   recurring:false },
-  { id:"lc3", type:"income",  amount:8500,  category:"Inversiones",     description:"Staking BTC rewards",  date:"2025-07-04", source:"digital", wallet:"lemoncash",   recurring:false },
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --fc-bg:            #0c0e1a;
+  --fc-bg-2:          #11131f;
+  --fc-surface:       #161826;
+  --fc-surface-2:     #1c1f30;
+  --fc-surface-3:     #252938;
+  --fc-overlay:       rgba(12, 14, 26, 0.82);
+  --fc-border:        rgba(255, 255, 255, 0.05);
+  --fc-border-strong: rgba(255, 255, 255, 0.09);
+  --fc-divider:       rgba(255, 255, 255, 0.035);
+
+  --fc-fg:            #f4f5fa;
+  --fc-fg-1:          rgba(244, 245, 250, 0.94);
+  --fc-fg-2:          rgba(244, 245, 250, 0.70);
+  --fc-fg-3:          rgba(244, 245, 250, 0.50);
+  --fc-fg-4:          rgba(244, 245, 250, 0.34);
+
+  --fc-violet:        #6c5cf0;
+  --fc-violet-hi:     #8576f5;
+  --fc-violet-lo:     #574ad0;
+  --fc-violet-tint:   rgba(108, 92, 240, 0.14);
+  --fc-violet-ring:   rgba(108, 92, 240, 0.36);
+  --fc-indigo:        #4f46e5;
+
+  --fc-grad-hero: linear-gradient(120deg, #4f46e5 0%, #6c5cf0 48%, #8b5cf6 100%);
+  --fc-grad-fab:  linear-gradient(135deg, #6c5cf0 0%, #5b4ee6 100%);
+
+  --fc-green:         #4ab38a;
+  --fc-green-hi:      #5fc89e;
+  --fc-green-tint:    rgba(74, 179, 138, 0.11);
+  --fc-green-ring:    rgba(74, 179, 138, 0.28);
+
+  --fc-pink:          #d96687;
+  --fc-pink-hi:       #e57f9c;
+  --fc-pink-tint:     rgba(217, 102, 135, 0.11);
+  --fc-pink-ring:     rgba(217, 102, 135, 0.28);
+
+  --fc-amber:         #d99850;
+  --fc-amber-tint:    rgba(217, 152, 80, 0.12);
+  --fc-info:          #6b8fd9;
+
+  --fc-font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --fc-ease:        cubic-bezier(0.22, 0.61, 0.36, 1);
+  --fc-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --fc-dur-fast:    120ms;
+  --fc-dur-base:    200ms;
+  --fc-dur-slow:    320ms;
+
+  --fc-shadow-2: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px rgba(0,0,0,0.35);
+  --fc-shadow-3: 0 1px 0 rgba(255,255,255,0.05) inset, 0 18px 48px rgba(0,0,0,0.45);
+  --fc-shadow-violet: 0 16px 40px rgba(108,92,240,0.32), 0 3px 10px rgba(108,92,240,0.22);
+  --fc-shadow-fab:    0 10px 24px rgba(108,92,240,0.42), 0 2px 6px rgba(0,0,0,0.30);
+}
+
+html, body {
+  background: var(--fc-bg);
+  color: var(--fc-fg-1);
+  font-family: var(--fc-font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Animations */
+@keyframes fcFade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fcPop  { from { opacity: 0; transform: scale(0.96) translateY(8px) } to { opacity: 1; transform: scale(1) translateY(0) } }
+@keyframes fcSlideUp { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }
+@keyframes slotUp   { from { transform: translateY(60%); opacity: 0; filter: blur(1px) } to { transform: translateY(0); opacity: 1; filter: blur(0) } }
+@keyframes slotDown { from { transform: translateY(-60%); opacity: 0; filter: blur(1px) } to { transform: translateY(0); opacity: 1; filter: blur(0) } }
+
+.fc-anim  { animation: fcSlideUp var(--fc-dur-slow) var(--fc-ease) both; }
+.slot-wrap { display: inline-block; overflow: hidden; vertical-align: bottom; }
+.slot-inner { display: inline-block; }
+
+input, select, textarea { font-family: var(--fc-font-sans); }
+input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.5); }
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { display: none; }
+select option { background: var(--fc-surface-2); }
+
+/* Tabular nums for money */
+.fc-num { font-variant-numeric: tabular-nums lining-nums; }
+
+/* Date/source grid mobile fix */
+.date-source-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 420px) {
+  .date-source-grid { grid-template-columns: 1fr; }
+}
+`;
+
+/* ═══════════════════════════════════════════════════════════
+   CATÁLOGO DE BANCOS Y BILLETERAS
+═══════════════════════════════════════════════════════════ */
+const ARG_BANKS = [
+  { id:'galicia',    name:'Galicia',         color:'#FF6E00', type:'Banco' },
+  { id:'santander',  name:'Santander',        color:'#EC0000', type:'Banco' },
+  { id:'bbva',       name:'BBVA',             color:'#004481', type:'Banco' },
+  { id:'macro',      name:'Macro',            color:'#FFCC00', type:'Banco' },
+  { id:'icbc',       name:'ICBC',             color:'#C8102E', type:'Banco' },
+  { id:'nacion',     name:'Banco Nación',     color:'#1F4E79', type:'Banco' },
+  { id:'provincia',  name:'Banco Provincia',  color:'#16A085', type:'Banco' },
+  { id:'ciudad',     name:'Banco Ciudad',     color:'#E63946', type:'Banco' },
+  { id:'hsbc',       name:'HSBC',             color:'#DB0011', type:'Banco' },
+  { id:'supervielle',name:'Supervielle',      color:'#FF6600', type:'Banco' },
+  { id:'mp',         name:'Mercado Pago',     color:'#00B0FF', type:'Billetera' },
+  { id:'naranjax',   name:'Naranja X',        color:'#FF6B1A', type:'Billetera' },
+  { id:'uala',       name:'Ualá',             color:'#22D39A', type:'Billetera' },
+  { id:'brubank',    name:'Brubank',          color:'#7C5CFF', type:'Billetera' },
+  { id:'lemoncash',  name:'Lemon Cash',       color:'#FFD700', type:'Billetera' },
+  { id:'modo',       name:'MODO',             color:'#3B47F1', type:'Billetera' },
+  { id:'paypal',     name:'PayPal',           color:'#003087', type:'Billetera' },
 ];
-const SYNC_STEPS = ["Conectando a Mercado Pago…","Importando Lemon Cash…","Normalizando datos…","¡Listo!"];
 
-/* ─── Helpers ───────────────────────────────────────────── */
-const fARS = n =>
-  new Intl.NumberFormat("es-AR",{style:"currency",currency:"ARS",maximumFractionDigits:0}).format(n);
-const fARSShort = n => {
-  if (Math.abs(n) >= 1000000) return `$${(n/1000000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1000)    return `$${(n/1000).toFixed(0)}k`;
-  return fARS(n);
+const CATEGORIES = [
+  { id:'sueldo',     label:'Sueldo',       icon:'briefcase', tone:'green',  type:'income'  },
+  { id:'freelance',  label:'Freelance',    icon:'zap',       tone:'green',  type:'income'  },
+  { id:'inversion',  label:'Inversión',    icon:'trendUp',   tone:'green',  type:'income'  },
+  { id:'transferencia',label:'Transferencia',icon:'card',    tone:'green',  type:'income'  },
+  { id:'otros-in',   label:'Otros',        icon:'wallet',    tone:'green',  type:'income'  },
+  { id:'comida',     label:'Comida',       icon:'utensils',  tone:'pink',   type:'expense' },
+  { id:'transporte', label:'Transporte',   icon:'car',       tone:'pink',   type:'expense' },
+  { id:'compras',    label:'Compras',      icon:'bag',       tone:'pink',   type:'expense' },
+  { id:'hogar',      label:'Hogar',        icon:'home',      tone:'pink',   type:'expense' },
+  { id:'servicios',  label:'Servicios',    icon:'zap',       tone:'amber',  type:'expense' },
+  { id:'salud',      label:'Salud',        icon:'star',      tone:'info',   type:'expense' },
+  { id:'otros-ex',   label:'Otros',        icon:'wallet',    tone:'muted',  type:'expense' },
+];
+
+/* ═══════════════════════════════════════════════════════════
+   ICON SET — del handoff de Claude Design (inline SVG)
+═══════════════════════════════════════════════════════════ */
+const ICON_PATHS = {
+  plus:      '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  minus:     '<line x1="5" y1="12" x2="19" y2="12"/>',
+  x:         '<path d="M18 6L6 18M6 6l12 12"/>',
+  check:     '<path d="M5 12l5 5L20 7"/>',
+  chevronDown: '<path d="M6 9l6 6 6-6"/>',
+  chevronRight:'<path d="M9 18l6-6-6-6"/>',
+  user:      '<circle cx="12" cy="8" r="4"/><path d="M6 20v-1a6 6 0 0 1 12 0v1"/>',
+  logout:    '<path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 0 1-2 2H5a2 2 0 0 0-2-2v-14a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1"/>',
+  search:    '<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>',
+  bank:      '<rect x="2" y="7" width="20" height="13" rx="2"/><path d="M2 10h20M6 2l6 3 6-3"/>',
+  wallet:    '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><circle cx="17" cy="14" r="1.5"/>',
+  cash:      '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>',
+  card:      '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>',
+  trendUp:   '<path d="M7 17L12 12L15 15L20 8"/><path d="M14 8h6v6"/>',
+  trendDown: '<path d="M7 7L12 12L15 9L20 14"/><path d="M14 14h6V8"/>',
+  utensils:  '<path d="M3 3v6c0 1.5 1 3 3 3v9"/><path d="M6 3v6"/><path d="M18 3c-2 0-3 2-3 4s1 4 3 4v10"/>',
+  car:       '<path d="M3 16V11l2-5h14l2 5v5"/><circle cx="7" cy="16" r="2"/><circle cx="17" cy="16" r="2"/><path d="M9 16h6"/>',
+  bag:       '<path d="M6 7v-1a4 4 0 0 1 8 0v1"/><rect x="3" y="7" width="18" height="14" rx="2"/>',
+  home:      '<path d="M3 11l9-8 9 8"/><path d="M5 10v11h14V10"/>',
+  zap:       '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  star:      '<path d="M12 3l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/>',
+  info:      '<circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v5h1"/>',
+  calendar:  '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  alert:     '<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
+  eye:       '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:    '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  mail:      '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+  lock:      '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  trash:     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>',
+  shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  refresh:   '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+  dashboard: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+  chart:     '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  list:      '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
 };
-const fDate = d =>
-  new Date(d+"T00:00:00").toLocaleDateString("es-AR",{day:"2-digit",month:"short"});
-const fDateLong = d =>
-  new Date(d+"T00:00:00").toLocaleDateString("es-AR",{
-    day:"2-digit", month:"long", weekday:"long"
-  }).replace(/^\w/,c=>c.toUpperCase());
+
+function Icon({ name, size=20, stroke=1.5, style, className }) {
+  const d = ICON_PATHS[name];
+  if (!d) return <span style={{color:'var(--fc-pink)',fontSize:10}}>?</span>;
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
+      style={style} className={className} dangerouslySetInnerHTML={{__html:d}}/>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════ */
+const fmt = (n, prefix='+') => {
+  if (n===0||n==null) return '$0';
+  const sign = n<0 ? '−' : prefix==='−' ? '−' : prefix==='+' ? '+' : '';
+  return `${sign}$${Math.abs(n).toLocaleString('es-AR',{maximumFractionDigits:0})}`;
+};
+const fmtDate = iso => {
+  if (!iso) return '';
+  const d = new Date(iso+'T00:00:00');
+  return d.toLocaleDateString('es-AR',{day:'2-digit',month:'short'});
+};
+const fmtDateLong = iso => {
+  if (!iso) return '';
+  const d = new Date(iso+'T00:00:00');
+  return d.toLocaleDateString('es-AR',{day:'2-digit',month:'long',weekday:'long'})
+    .replace(/^\w/,c=>c.toUpperCase());
+};
+const todayISO = () => new Date().toISOString().split('T')[0];
 const uid = () => Math.random().toString(36).slice(2,10);
 
-/* ─── Hook: slot machine animation ──────────────────────────
-   Simula un tambor de lotería:
-   - Inicia lento (intervalos largos entre números)
-   - Acelera progresivamente (intervalos que se acortan, ease-in)
-   - Cada número intermedio desliza hacia arriba o abajo
-   - Devuelve { val, animKey, dir } para disparar el CSS slide
-─────────────────────────────────────────────────────────── */
-function useSlotMachine(target, duration = 1100) {
-  const [state, setState] = useState({ val: target, animKey: 0, dir: 0 });
-  const prevRef  = useRef(target);
-  const timers   = useRef([]);
+/* ═══════════════════════════════════════════════════════════
+   ATOM COMPONENTS — del design system nuevo
+═══════════════════════════════════════════════════════════ */
+function IconTile({ name, color='violet', size=40 }) {
+  const palettes = {
+    violet:{ bg:'var(--fc-violet-tint)', fg:'var(--fc-violet-hi)', bd:'var(--fc-violet-ring)' },
+    green: { bg:'var(--fc-green-tint)',  fg:'var(--fc-green)',     bd:'var(--fc-green-ring)'  },
+    pink:  { bg:'var(--fc-pink-tint)',   fg:'var(--fc-pink)',      bd:'var(--fc-pink-ring)'   },
+    amber: { bg:'var(--fc-amber-tint)',  fg:'var(--fc-amber)',     bd:'rgba(217,152,80,.32)'  },
+    info:  { bg:'rgba(107,143,217,.12)', fg:'var(--fc-info)',      bd:'rgba(107,143,217,.32)' },
+    muted: { bg:'var(--fc-surface-2)',   fg:'var(--fc-fg-2)',      bd:'var(--fc-border)'      },
+  };
+  const p = palettes[color]||palettes.violet;
+  return (
+    <span style={{width:size,height:size,borderRadius:12,display:'inline-flex',alignItems:'center',
+        justifyContent:'center',background:p.bg,color:p.fg,border:`1px solid ${p.bd}`,flex:'none'}}>
+      <Icon name={name} size={Math.round(size*0.5)}/>
+    </span>
+  );
+}
 
-  useEffect(() => {
-    if (prevRef.current === target) return;
+function BankBadge({ bankId, size=40 }) {
+  const bank = bankId==='efectivo'
+    ? {name:'Efectivo',color:'#4ab38a'}
+    : ARG_BANKS.find(b=>b.id===bankId);
+  if (!bank) return <IconTile name="wallet" color="muted" size={size}/>;
+  return (
+    <span style={{width:size,height:size,borderRadius:Math.round(size*0.28),display:'inline-flex',
+        alignItems:'center',justifyContent:'center',background:bank.color+'20',
+        border:`1px solid ${bank.color}40`,flex:'none',fontSize:Math.round(size*0.35),
+        fontWeight:700,color:bank.color}}>
+      {bank.name.slice(0,bank.id==='nacion'?2:1).toUpperCase()}
+    </span>
+  );
+}
 
-    const from = prevRef.current;
-    const to   = target;
-    const dir  = to > from ? 1 : -1;
-    prevRef.current = to;
+function Badge({ children, tone='muted' }) {
+  const map = {
+    muted:  {color:'var(--fc-fg-2)',      bg:'var(--fc-surface-2)',  bd:'var(--fc-border)'},
+    amber:  {color:'var(--fc-amber)',     bg:'var(--fc-amber-tint)', bd:'rgba(217,152,80,.32)'},
+    green:  {color:'var(--fc-green)',     bg:'var(--fc-green-tint)', bd:'var(--fc-green-ring)'},
+    pink:   {color:'var(--fc-pink)',      bg:'var(--fc-pink-tint)',  bd:'var(--fc-pink-ring)'},
+    violet: {color:'var(--fc-violet-hi)',bg:'var(--fc-violet-tint)',bd:'var(--fc-violet-ring)'},
+  };
+  const p=map[tone]||map.muted;
+  return (
+    <span style={{display:'inline-flex',padding:'3px 9px',borderRadius:999,
+        fontSize:10,fontWeight:700,letterSpacing:'0.08em',
+        color:p.color,background:p.bg,border:`1px solid ${p.bd}`}}>
+      {children}
+    </span>
+  );
+}
 
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
+function Spinner({ size=20, color='var(--fc-violet-hi)' }) {
+  return (
+    <span style={{display:'inline-block',width:size,height:size,border:`2px solid ${color}30`,
+        borderTopColor:color,borderRadius:'50%',animation:'spin 0.7s linear infinite'}}/>
+  );
+}
 
-    // 20 ticks — más ticks = efecto de tambor más notorio
-    const N = 20;
-    // Intervalos decrecientes: i=1 es el más largo (lento), i=N el más corto (rápido)
-    // interval[i] = C * (N - i + 1)²  →  cuadrático = aceleración más dramática
-    const sumWeights = Array.from({length:N},(_,i)=>Math.pow(N-i,2)).reduce((a,b)=>a+b,0);
-    const C = duration / sumWeights;
-    let cumTime = 0;
+/* ═══════════════════════════════════════════════════════════
+   SECURITY — Auth helpers
+═══════════════════════════════════════════════════════════ */
+const SESSION_KEY = 'fc_session_v1';
+const loadSession = () => JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');
+const saveSession = s  => sessionStorage.setItem(SESSION_KEY,JSON.stringify(s));
+const clearSession= () => { sessionStorage.removeItem(SESSION_KEY); authApi.logout(); };
 
-    for (let i = 1; i <= N; i++) {
-      const interval = C * Math.pow(N - i + 1, 2);
-      cumTime += interval;
-      // Progresión de valor: p^3 concentra todos los cambios grandes al final
-      const p   = Math.pow(i / N, 3);
-      const val = i === N ? to : Math.round(from + (to - from) * p);
-
-      timers.current.push(
-        setTimeout(() =>
-          setState(prev => ({ val, animKey: prev.animKey + 1, dir })),
-          Math.round(cumTime)
-        )
-      );
+/* ═══════════════════════════════════════════════════════════
+   SLOT MACHINE ANIMATION
+═══════════════════════════════════════════════════════════ */
+function useSlotMachine(target, duration=1000) {
+  const [state, setState] = useState({val:target,animKey:0,dir:0});
+  const prevRef = useRef(target);
+  const timers  = useRef([]);
+  useEffect(()=>{
+    if (prevRef.current===target) return;
+    const from=prevRef.current, to=target, dir=to>from?1:-1;
+    prevRef.current=to;
+    timers.current.forEach(clearTimeout); timers.current=[];
+    const N=18, sumW=Array.from({length:N},(_,i)=>Math.pow(N-i,2)).reduce((a,b)=>a+b,0);
+    const C=duration/sumW; let cum=0;
+    for (let i=1;i<=N;i++){
+      const interval=C*Math.pow(N-i+1,2); cum+=interval;
+      const p=Math.pow(i/N,3);
+      const val=i===N?to:Math.round(from+(to-from)*p);
+      timers.current.push(setTimeout(()=>setState(prev=>({val,animKey:prev.animKey+1,dir})),Math.round(cum)));
     }
-
-    return () => timers.current.forEach(clearTimeout);
-  }, [target, duration]);
-
+    return ()=>timers.current.forEach(clearTimeout);
+  },[target,duration]);
   return state;
 }
 
-/* ─── Component: SwipeableRow ────────────────────────────────
-   En mobile: deslizar a la izquierda revela botón de eliminar.
-   En desktop: el botón de eliminar aparece en el hover del padre.
-   Nunca muestra el botón permanentemente — reduce el ruido visual.
-─────────────────────────────────────────────────────────── */
-function SwipeableRow({ id, onDeleteRequest, children }) {
-  const [swipeX, setSwipeX]   = useState(0);
-  const [opened, setOpened]   = useState(false);
-  const startX = useRef(0);
-  const moving = useRef(false);
-  const PANEL  = 76; // width of delete panel px
-  const THRESH = 50;
-
-  const onTouchStart = e => {
-    startX.current = e.touches[0].clientX;
-    moving.current = true;
-  };
-  const onTouchMove = e => {
-    if (!moving.current) return;
-    const diff = startX.current - e.touches[0].clientX;
-    if (diff > 0) setSwipeX(Math.min(diff, PANEL));
-    else if (opened) setSwipeX(Math.max(PANEL + diff, 0));
-  };
-  const onTouchEnd = () => {
-    moving.current = false;
-    if (swipeX > THRESH) { setSwipeX(PANEL); setOpened(true); }
-    else                  { setSwipeX(0);     setOpened(false); }
-  };
-
+function SlotNumber({ slot, prefix='', suffix='', style }) {
   return (
-    <div style={{position:"relative", overflow:"hidden"}}>
-      {/* Red panel behind */}
-      <div style={{position:"absolute", right:0, top:0, bottom:0, width:PANEL,
-          background:"#DC2626", display:"flex", alignItems:"center", justifyContent:"center",
-          cursor:"pointer"}}
-           onClick={() => { setSwipeX(0); setOpened(false); onDeleteRequest(id); }}>
-        <Trash2 size={19} color="#fff"/>
+    <span className="slot-wrap" style={style}>
+      <span key={slot.animKey} className="slot-inner" style={{
+        animation:slot.dir!==0?`${slot.dir>0?'slotUp':'slotDown'} 0.12s ease-out both`:'none'
+      }}>
+        {prefix}{slot.val===0?'$0':fmt(slot.val,slot.dir>0?'+':slot.dir<0?'-':'')}{suffix}
+      </span>
+    </span>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SWIPEABLE ROW — para eliminar en mobile
+═══════════════════════════════════════════════════════════ */
+function SwipeableRow({ id, onDeleteRequest, children }) {
+  const [swipeX, setSwipeX] = useState(0);
+  const [opened, setOpened] = useState(false);
+  const startX = useRef(0), moving = useRef(false);
+  const PANEL=72, THRESH=48;
+  const onTouchStart=e=>{startX.current=e.touches[0].clientX;moving.current=true;};
+  const onTouchMove=e=>{
+    if(!moving.current) return;
+    const diff=startX.current-e.touches[0].clientX;
+    if(diff>0) setSwipeX(Math.min(diff,PANEL));
+    else if(opened) setSwipeX(Math.max(PANEL+diff,0));
+  };
+  const onTouchEnd=()=>{
+    moving.current=false;
+    if(swipeX>THRESH){setSwipeX(PANEL);setOpened(true);}
+    else{setSwipeX(0);setOpened(false);}
+  };
+  return (
+    <div style={{position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',right:0,top:0,bottom:0,width:PANEL,
+          background:'#c0243c',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}
+           onClick={()=>{setSwipeX(0);setOpened(false);onDeleteRequest(id);}}>
+        <Icon name="trash" size={18} color="#fff"/>
       </div>
-      {/* Slideable content */}
       <div style={{transform:`translateX(-${swipeX}px)`,
-          transition: moving.current ? "none" : "transform .25s ease-out"}}
+          transition:moving.current?'none':'transform .22s ease-out'}}
            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
         {children}
       </div>
@@ -171,238 +363,252 @@ function SwipeableRow({ id, onDeleteRequest, children }) {
   );
 }
 
-/* ─── Tooltip ───────────────────────────────────────────── */
-const CustomTooltip = ({ active, payload }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{background:"#1E293B",border:"1px solid #334155",borderRadius:10,
-        padding:"8px 12px",fontSize:12}}>
-      <p style={{color:"#94A3B8",margin:"0 0 2px"}}>{payload[0].name}</p>
-      <p style={{color:"#F1F5F9",fontWeight:600,margin:0}}>{fARS(payload[0].value)}</p>
-    </div>
-  );
-};
-
-/* ─── Component: DonutWithTooltip ────────────────────────────
-   Tooltip que aparece siempre en la parte SUPERIOR de la dona,
-   nunca sobre el centro. Mismo estilo que el tooltip original.
-─────────────────────────────────────────────────────────── */
-function DonutWithTooltip({ data, total }) {
-  const [tip, setTip] = useState(null);
-
-  /* Recharts pasa los datos del segmento en onMouseEnter del Pie */
-  const handleEnter = (sliceData) => {
-    setTip({
-      name:  sliceData.name,
-      value: sliceData.value,
-      color: sliceData.fill,
-    });
+/* ═══════════════════════════════════════════════════════════
+   WALLET MANAGER MODAL
+═══════════════════════════════════════════════════════════ */
+function WalletManager({ activeKeys, onSave, onClose }) {
+  const [selected, setSelected] = useState([...activeKeys]);
+  const toggle = key => {
+    if(key==='efectivo') return;
+    setSelected(prev=>prev.includes(key)?prev.filter(k=>k!==key):[...prev,key]);
   };
-
-  const pct = tip && total > 0 ? Math.round((tip.value / total) * 100) : 0;
-
+  const groups = [
+    {label:'Billeteras virtuales', type:'Billetera'},
+    {label:'Bancos', type:'Banco'},
+  ];
   return (
-    <div style={{position:"relative", marginBottom:4}}>
-
-      {/* Tooltip flotante — aparece arriba del gráfico, nunca tapa el centro */}
-      <div style={{
-        position:"absolute", top:-10, left:"50%", transform:"translateX(-50%)",
-        zIndex:20, pointerEvents:"none",
-        opacity: tip ? 1 : 0,
-        transition:"opacity .15s ease",
-      }}>
-        {tip && (
-          <div style={{
-            background:"#1E293B",
-            border:`1px solid ${tip.color}55`,
-            borderRadius:10,
-            padding:"8px 13px",
-            whiteSpace:"nowrap",
-            boxShadow:"0 6px 20px rgba(0,0,0,.45)",
-            display:"flex", flexDirection:"column", alignItems:"center", gap:2,
-          }}>
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <div style={{width:8,height:8,borderRadius:"50%",background:tip.color}}/>
-              <span style={{fontSize:12,fontWeight:700,color:"#F1F5F9"}}>{tip.name}</span>
-            </div>
-            <span style={{fontSize:14,fontWeight:800,color:tip.color}}>{fARS(tip.value)}</span>
-            <span style={{fontSize:10,color:"#64748B"}}>{pct}% del total</span>
+    <div style={{position:'fixed',inset:0,zIndex:300,display:'flex',alignItems:'center',
+        justifyContent:'center',padding:'16px 20px',background:'var(--fc-overlay)',
+        backdropFilter:'blur(8px)',animation:'fcFade 200ms var(--fc-ease)'}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{width:'100%',maxWidth:500,background:'var(--fc-bg-2)',
+          border:'1px solid var(--fc-border-strong)',borderRadius:22,padding:24,
+          maxHeight:'85vh',overflowY:'auto',animation:'fcPop 220ms var(--fc-ease)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+          <div>
+            <p style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)'}}>Mis billeteras</p>
+            <p style={{fontSize:12,color:'var(--fc-fg-3)',marginTop:3}}>Activá las que usás</p>
           </div>
-        )}
-      </div>
+          <button onClick={onClose} style={{width:36,height:36,borderRadius:10,
+              background:'var(--fc-surface-2)',border:'none',cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fc-fg-2)'}}>
+            <Icon name="x" size={16}/>
+          </button>
+        </div>
 
-      <ResponsiveContainer width="100%" height={190}>
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%" cy="50%"
-            innerRadius={60} outerRadius={88}
-            paddingAngle={4} dataKey="value" strokeWidth={0}
-            onMouseEnter={handleEnter}
-            onMouseLeave={()=>setTip(null)}
-          >
-            {data.map((e,i)=><Cell key={i} fill={e.color}/>)}
-          </Pie>
-          {/* Sin Tooltip de Recharts — usamos el nuestro arriba */}
-        </PieChart>
-      </ResponsiveContainer>
+        {/* Efectivo siempre activo */}
+        <div style={{display:'flex',alignItems:'center',gap:12,background:'var(--fc-surface)',
+            border:'1px solid var(--fc-green-ring)',borderRadius:14,padding:'12px 16px',marginBottom:20}}>
+          <BankBadge bankId="efectivo" size={36}/>
+          <div style={{flex:1}}>
+            <p style={{fontSize:13,fontWeight:700,color:'var(--fc-fg-1)'}}>Efectivo</p>
+            <p style={{fontSize:11,color:'var(--fc-fg-3)'}}>Siempre activo</p>
+          </div>
+          <span style={{width:22,height:22,borderRadius:'50%',background:'var(--fc-green)',
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <Icon name="check" size={13} stroke={2.5} style={{color:'#fff'}}/>
+          </span>
+        </div>
 
-      {/* Centro de la dona — siempre visible */}
-      <div style={{position:"absolute",top:"50%",left:"50%",
-          transform:"translate(-50%,-50%)",textAlign:"center",pointerEvents:"none",zIndex:1}}>
-        <p style={{fontSize:10,color:"#64748B",fontWeight:600,
-            textTransform:"uppercase",letterSpacing:.4}}>Total</p>
-        <p style={{fontSize:14,fontWeight:800,color:"#E2E8F0"}}>{fARS(total)}</p>
+        {groups.map(({label,type})=>(
+          <div key={type} style={{marginBottom:20}}>
+            <p style={{fontSize:10,fontWeight:700,color:'var(--fc-fg-3)',letterSpacing:'0.1em',
+                textTransform:'uppercase',marginBottom:10}}>{label}</p>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {ARG_BANKS.filter(b=>b.type===type).map(bank=>{
+                const on=selected.includes(bank.id);
+                return (
+                  <button key={bank.id} onClick={()=>toggle(bank.id)}
+                    style={{display:'flex',alignItems:'center',gap:10,padding:'11px 14px',
+                      borderRadius:12,border:`1.5px solid ${on?bank.color+'60':'var(--fc-border-strong)'}`,
+                      background:on?bank.color+'12':'var(--fc-surface)',cursor:'pointer',
+                      fontFamily:'var(--fc-font-sans)',transition:'all 0.18s',textAlign:'left'}}>
+                    <BankBadge bankId={bank.id} size={30}/>
+                    <span style={{fontSize:12,fontWeight:600,flex:1,overflow:'hidden',
+                        textOverflow:'ellipsis',whiteSpace:'nowrap',
+                        color:on?bank.color:'var(--fc-fg-2)'}}>
+                      {bank.name}
+                    </span>
+                    <span style={{width:18,height:18,borderRadius:'50%',flex:'none',display:'flex',
+                        alignItems:'center',justifyContent:'center',transition:'all .18s',
+                        background:on?bank.color:'transparent',
+                        border:on?'none':'1px solid var(--fc-border-strong)'}}>
+                      {on&&<Icon name="check" size={11} stroke={2.5} style={{color:'#fff'}}/>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <button onClick={()=>onSave(selected)}
+          style={{width:'100%',padding:14,borderRadius:14,fontSize:15,fontWeight:700,
+            color:'#fff',border:'none',cursor:'pointer',fontFamily:'var(--fc-font-sans)',
+            background:'var(--fc-violet)',boxShadow:'var(--fc-shadow-violet)'}}>
+          Guardar billeteras
+        </button>
+        <p style={{fontSize:11,color:'var(--fc-fg-3)',textAlign:'center',marginTop:10}}>
+          {selected.filter(k=>k!=='efectivo').length} billetera(s) adicional(es) activa(s)
+        </p>
       </div>
     </div>
   );
 }
 
-/* ════════════════════════════════════════════════════════════
-   AUTH SCREEN
-════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   AUTH SCREEN — nuevo diseño
+═══════════════════════════════════════════════════════════ */
 function AuthScreen({ onAuth }) {
   const [mode, setMode]     = useState('login');
   const [email, setEmail]   = useState('');
   const [pw, setPw]         = useState('');
   const [pw2, setPw2]       = useState('');
   const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]= useState(false);
   const [error, setError]   = useState('');
   const [ok, setOk]         = useState('');
 
   const submit = async () => {
     setError(''); setOk('');
-    if (!email.trim()||!pw) { setError('Completá todos los campos.'); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setError('Email inválido.'); return; }
-    if (pw.length < 8) { setError('Mínimo 8 caracteres.'); return; }
-    if (mode==='register' && pw!==pw2) { setError('Las contraseñas no coinciden.'); return; }
+    if(!email.trim()||!pw){setError('Completá todos los campos.');return;}
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){setError('Email inválido.');return;}
+    if(pw.length<8){setError('Mínimo 8 caracteres.');return;}
+    if(mode==='register'&&pw!==pw2){setError('Las contraseñas no coinciden.');return;}
     setLoading(true);
     try {
-      const norm = email.trim().toLowerCase();
-      let user;
-      if (mode==='register') {
-        user = await authApi.register(norm, pw);
-      } else {
-        user = await authApi.login(norm, pw);
-      }
-      const s = { userId: user.id, email: user.email };
+      const norm=email.trim().toLowerCase();
+      const user=mode==='register' ? await authApi.register(norm,pw) : await authApi.login(norm,pw);
+      const s={userId:user.id,email:user.email};
       saveSession(s);
-      setOk(mode==='register' ? '¡Cuenta creada!' : 'Bienvenido…');
-      setTimeout(() => onAuth(s), 500);
-    } catch(e) {
-      setError(e.message || 'Error de conexión. Verificá tu internet.');
-    }
+      setOk(mode==='register'?'¡Cuenta creada!':'Bienvenido…');
+      setTimeout(()=>onAuth(s),500);
+    } catch(e){ setError(e.message||'Error de conexión.'); }
     setLoading(false);
   };
 
-  const css = `
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#020617;font-family:'Plus Jakarta Sans',sans-serif;}
-    .ai{width:100%;background:#1E293B;border:1px solid #334155;border-radius:12px;
-      padding:13px 16px;font-size:14px;color:#F1F5F9;outline:none;font-family:inherit;transition:border-color .2s;}
-    .ai:focus{border-color:#6366F1;} .ai::placeholder{color:#475569;}
-    .ab{width:100%;padding:14px;border-radius:14px;font-size:15px;font-weight:700;color:#fff;border:none;
-      cursor:pointer;font-family:inherit;background:linear-gradient(135deg,#6366F1,#8B5CF6);transition:opacity .2s;}
-    .ab:hover:not(:disabled){opacity:.9;} .ab:disabled{opacity:.45;cursor:not-allowed;}
-    .fa{animation:fa .3s ease-out;}
-    @keyframes fa{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-  `;
-
   return (
-    <div style={{minHeight:"100vh",background:"#020617",display:"flex",alignItems:"center",
-        justifyContent:"center",padding:"20px",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-      <style>{css}</style>
-      <div className="fa" style={{width:"100%",maxWidth:420}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{width:52,height:52,borderRadius:16,margin:"0 auto 14px",
-              background:"linear-gradient(135deg,#6366F1,#8B5CF6)",
-              display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <Wallet size={24} color="#fff"/>
+    <div style={{minHeight:'100vh',background:'var(--fc-bg)',display:'flex',
+        alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{width:'100%',maxWidth:400,animation:'fcSlideUp 300ms var(--fc-ease) both'}}>
+        <div style={{textAlign:'center',marginBottom:32}}>
+          <div style={{width:56,height:56,borderRadius:18,margin:'0 auto 16px',
+              background:'var(--fc-grad-hero)',display:'flex',alignItems:'center',
+              justifyContent:'center',boxShadow:'var(--fc-shadow-violet)'}}>
+            <Icon name="wallet" size={26} style={{color:'#fff'}}/>
           </div>
-          <h1 style={{fontSize:26,fontWeight:800,color:"#F1F5F9",letterSpacing:"-.5px"}}>
-            Flow<span style={{color:"#818CF8"}}>Cash</span>
+          <h1 style={{fontSize:28,fontWeight:700,letterSpacing:'-0.02em',color:'var(--fc-fg-1)'}}>
+            Flow<span style={{color:'var(--fc-violet-hi)'}}>Cash</span>
           </h1>
-          <p style={{fontSize:13,color:"#64748B",marginTop:4}}>
-            {mode==='login'?"Iniciá sesión para continuar":"Creá tu cuenta gratuita"}
+          <p style={{fontSize:13,color:'var(--fc-fg-3)',marginTop:4}}>
+            {mode==='login'?'Iniciá sesión para continuar':'Creá tu cuenta gratuita'}
           </p>
         </div>
-        <div style={{background:"#0F172A",border:"1px solid #1E293B",borderRadius:20,padding:28}}>
-          <div style={{display:"flex",background:"#1E293B",borderRadius:12,padding:4,gap:4,marginBottom:24}}>
-            {[['login','Iniciar sesión',LogIn],['register','Crear cuenta',UserPlus]].map(([v,l,Ic])=>(
+
+        <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border-strong)',
+            borderRadius:22,padding:28}}>
+          {/* Toggle */}
+          <div style={{display:'flex',background:'var(--fc-surface-2)',borderRadius:14,padding:5,gap:4,marginBottom:24}}>
+            {[['login','Iniciar sesión'],['register','Crear cuenta']].map(([v,l])=>(
               <button key={v} onClick={()=>{setMode(v);setError('');setOk('');}}
-                style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:6,
-                  padding:"9px 8px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,
-                  fontWeight:600,fontFamily:"inherit",transition:"all .2s",
-                  background:mode===v?"linear-gradient(135deg,#6366F1,#8B5CF6)":"none",
-                  color:mode===v?"#fff":"#64748B"}}>
-                <Ic size={14}/>{l}
+                style={{flex:1,padding:'10px',borderRadius:11,border:'none',cursor:'pointer',
+                  fontSize:13,fontWeight:600,fontFamily:'var(--fc-font-sans)',transition:'all .2s',
+                  background:mode===v?'var(--fc-violet)':'transparent',
+                  color:mode===v?'#fff':'var(--fc-fg-3)',
+                  boxShadow:mode===v?'var(--fc-shadow-violet)':'none'}}>
+                {l}
               </button>
             ))}
           </div>
-          {error && <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
-              borderRadius:10,background:"rgba(244,114,182,.1)",border:"1px solid rgba(244,114,182,.25)",
-              marginBottom:14}}><AlertCircle size={14} color="#F472B6"/>
-            <span style={{fontSize:12,color:"#F472B6",fontWeight:500}}>{error}</span></div>}
-          {ok && <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
-              borderRadius:10,background:"rgba(52,211,153,.1)",border:"1px solid rgba(52,211,153,.25)",
-              marginBottom:14}}><CheckCircle size={14} color="#34D399"/>
-            <span style={{fontSize:12,color:"#34D399",fontWeight:500}}>{ok}</span></div>}
-          {[['Email','email',email,setEmail,Mail,'tu@email.com'],
-            ['Contraseña','password',pw,setPw,Lock,'Mínimo 8 caracteres']].map(([lbl,type,val,set,Ic,ph],i)=>(
+
+          {error && (
+            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 14px',
+                borderRadius:10,background:'var(--fc-pink-tint)',border:'1px solid var(--fc-pink-ring)',
+                marginBottom:16}}>
+              <Icon name="alert" size={14} style={{color:'var(--fc-pink)',flexShrink:0}}/>
+              <span style={{fontSize:12,color:'var(--fc-pink)',fontWeight:500}}>{error}</span>
+            </div>
+          )}
+          {ok && (
+            <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 14px',
+                borderRadius:10,background:'var(--fc-green-tint)',border:'1px solid var(--fc-green-ring)',
+                marginBottom:16}}>
+              <Icon name="check" size={14} style={{color:'var(--fc-green)',flexShrink:0}}/>
+              <span style={{fontSize:12,color:'var(--fc-green)',fontWeight:500}}>{ok}</span>
+            </div>
+          )}
+
+          {[
+            ['Email','email',email,setEmail,'mail','tu@email.com'],
+            ['Contraseña','password',pw,setPw,'lock','Mínimo 8 caracteres'],
+          ].map(([lbl,type,val,set,ico,ph])=>(
             <div key={lbl} style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
-                {lbl.toUpperCase()}
-              </label>
-              <div style={{position:"relative"}}>
-                <Ic size={14} color="#475569"
-                  style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}/>
-                <input className="ai" type={type==='password'?(showPw?'text':'password'):type}
-                  value={val} onChange={e=>set(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&submit()} placeholder={ph}
-                  style={{paddingLeft:38,paddingRight:type==='password'?44:16}}/>
+              <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                  color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>{lbl}</label>
+              <div style={{position:'relative'}}>
+                <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',
+                    color:'var(--fc-fg-3)',display:'flex'}}>
+                  <Icon name={ico} size={15}/>
+                </span>
+                <input type={type==='password'?(showPw?'text':'password'):type} value={val}
+                  onChange={e=>set(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
+                  placeholder={ph}
+                  style={{width:'100%',height:46,background:'var(--fc-surface-2)',
+                    border:'1px solid var(--fc-border-strong)',borderRadius:12,
+                    paddingLeft:42,paddingRight:type==='password'?44:14,
+                    color:'var(--fc-fg-1)',fontSize:14,outline:'none',
+                    transition:'border-color .2s',fontFamily:'var(--fc-font-sans)'}}
+                  onFocus={e=>e.target.style.borderColor='var(--fc-violet)'}
+                  onBlur={e=>e.target.style.borderColor='var(--fc-border-strong)'}/>
                 {type==='password' && (
                   <button onClick={()=>setShowPw(!showPw)}
-                    style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
-                      background:"none",border:"none",cursor:"pointer",color:"#475569",padding:4}}>
-                    {showPw?<EyeOff size={15}/>:<Eye size={15}/>}
+                    style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',
+                      background:'none',border:'none',cursor:'pointer',color:'var(--fc-fg-3)',
+                      display:'flex',padding:4}}>
+                    <Icon name={showPw?'eyeOff':'eye'} size={15}/>
                   </button>
                 )}
               </div>
             </div>
           ))}
+
           {mode==='register' && (
-            <div style={{marginBottom:18}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
-                CONFIRMAR CONTRASEÑA
-              </label>
-              <div style={{position:"relative"}}>
-                <Lock size={14} color="#475569"
-                  style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}/>
-                <input className="ai" type={showPw?'text':'password'} value={pw2}
-                  onChange={e=>setPw2(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}
-                  placeholder="Repetí tu contraseña"
-                  style={{paddingLeft:38,
-                    borderColor:pw2&&pw2!==pw?"rgba(244,114,182,.5)":pw2&&pw2===pw?"rgba(52,211,153,.5)":"#334155"}}/>
+            <div style={{marginBottom:20}}>
+              <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                  color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>Confirmar contraseña</label>
+              <div style={{position:'relative'}}>
+                <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',
+                    color:'var(--fc-fg-3)',display:'flex'}}><Icon name="lock" size={15}/></span>
+                <input type={showPw?'text':'password'} value={pw2} onChange={e=>setPw2(e.target.value)}
+                  onKeyDown={e=>e.key==='Enter'&&submit()} placeholder="Repetí tu contraseña"
+                  style={{width:'100%',height:46,background:'var(--fc-surface-2)',
+                    border:`1px solid ${pw2&&pw2!==pw?'var(--fc-pink-ring)':pw2&&pw2===pw?'var(--fc-green-ring)':'var(--fc-border-strong)'}`,
+                    borderRadius:12,paddingLeft:42,paddingRight:14,
+                    color:'var(--fc-fg-1)',fontSize:14,outline:'none',fontFamily:'var(--fc-font-sans)'}}/>
               </div>
-              {pw2&&pw2===pw&&<p style={{fontSize:11,color:"#34D399",marginTop:4,display:"flex",alignItems:"center",gap:4}}>
-                <CheckCircle size={11}/>Coinciden</p>}
+              {pw2&&pw2===pw&&<p style={{fontSize:11,color:'var(--fc-green)',marginTop:5,display:'flex',alignItems:'center',gap:4}}>
+                <Icon name="check" size={11} stroke={2}/> Contraseñas coinciden
+              </p>}
             </div>
           )}
-          <button className="ab" onClick={submit}
-            disabled={loading||(mode==='register'&&(!pw2||pw2!==pw))}>
-            {loading?"Procesando…":mode==='login'?"Entrar a FlowCash":"Crear mi cuenta"}
+
+          <button onClick={submit}
+            disabled={loading||(mode==='register'&&(!pw2||pw2!==pw))}
+            style={{width:'100%',height:48,borderRadius:14,fontSize:15,fontWeight:700,
+              color:'#fff',border:'none',cursor:loading?'wait':'pointer',
+              fontFamily:'var(--fc-font-sans)',display:'flex',alignItems:'center',
+              justifyContent:'center',gap:10,transition:'opacity .2s',
+              background:'var(--fc-violet)',boxShadow:'var(--fc-shadow-violet)',
+              opacity:(loading||(mode==='register'&&(!pw2||pw2!==pw)))?0.5:1}}>
+            {loading ? <><Spinner size={18} color="#fff"/> Procesando…</> : mode==='login'?'Entrar a FlowCash':'Crear mi cuenta'}
           </button>
-          <div style={{marginTop:16,padding:"10px 12px",background:"rgba(99,102,241,.06)",
-              borderRadius:10,border:"1px solid rgba(99,102,241,.15)"}}>
-            <div style={{display:"flex",alignItems:"flex-start",gap:7}}>
-              <Shield size={12} color="#818CF8" style={{marginTop:2,flexShrink:0}}/>
-              <p style={{fontSize:11,color:"#64748B",lineHeight:1.6}}>
-                Tu contraseña se hashea con <span style={{color:"#818CF8",fontWeight:600}}>SHA-256</span> antes
-                de guardarse. Nadie puede acceder a tus datos.
-              </p>
-            </div>
+
+          <div style={{marginTop:16,padding:'10px 14px',background:'var(--fc-violet-tint)',
+              borderRadius:10,border:'1px solid var(--fc-violet-ring)',display:'flex',gap:8,alignItems:'flex-start'}}>
+            <Icon name="shield" size={13} style={{color:'var(--fc-violet-hi)',marginTop:2,flexShrink:0}}/>
+            <p style={{fontSize:11,color:'var(--fc-fg-3)',lineHeight:1.6}}>
+              Tu contraseña se cifra con <span style={{color:'var(--fc-violet-hi)',fontWeight:600}}>bcrypt</span> antes de guardarse. Nadie puede acceder a tus datos.
+            </p>
           </div>
         </div>
       </div>
@@ -410,765 +616,576 @@ function AuthScreen({ onAuth }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════
    ROOT
-════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════ */
 export default function FlowCash() {
   const [session, setSession] = useState(null);
   const [checked, setChecked] = useState(false);
-
-  useEffect(() => {
-    // Si hay token guardado en sessionStorage, verificarlo con el backend
-    if (authApi.isLoggedIn()) {
-      const cached = loadSession();
-      if (cached) {
-        // Verificar que el token sigue siendo válido
-        authApi.me()
-          .then(data => {
-            setSession({ userId: data.user.id, email: data.user.email });
-          })
-          .catch(() => {
-            // Token expirado o inválido — cerrar sesión
-            clearSession();
-          })
-          .finally(() => setChecked(true));
-      } else {
-        clearSession();
-        setChecked(true);
-      }
-    } else {
-      setChecked(true);
-    }
-  }, []);
-
-  if (!checked) return (
-    <div style={{minHeight:"100vh",background:"#020617",display:"flex",
-        alignItems:"center",justifyContent:"center"}}>
-      <div style={{textAlign:"center"}}>
-        <div style={{width:40,height:40,border:"3px solid #6366F1",borderTopColor:"transparent",
-            borderRadius:"50%",animation:"spin 0.8s linear infinite",margin:"0 auto 12px"}}/>
-        <p style={{fontSize:13,color:"#64748B",fontFamily:"sans-serif"}}>Cargando FlowCash…</p>
-      </div>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
+  useEffect(()=>{
+    if(authApi.isLoggedIn()){
+      const cached=loadSession();
+      if(cached) authApi.me().then(d=>{setSession({userId:d.user.id,email:d.user.email});})
+        .catch(()=>clearSession()).finally(()=>setChecked(true));
+      else{clearSession();setChecked(true);}
+    } else setChecked(true);
+  },[]);
+  if(!checked) return (
+    <div style={{minHeight:'100vh',background:'var(--fc-bg)',display:'flex',
+        alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}>
+      <Spinner size={40}/>
+      <p style={{fontSize:13,color:'var(--fc-fg-3)',fontFamily:'var(--fc-font-sans)'}}>Cargando FlowCash…</p>
     </div>
   );
-  if (!session) return <AuthScreen onAuth={s=>{ saveSession(s); setSession(s); }}/>;
-  return <AppContent session={session} onLogout={()=>{ clearSession(); setSession(null); }}/>;
+  if(!session) return <AuthScreen onAuth={s=>{saveSession(s);setSession(s);}}/>;
+  return <AppContent session={session} onLogout={()=>{clearSession();setSession(null);}}/>;
 }
 
-/* ════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════
    APP CONTENT
-════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════ */
 function AppContent({ session, onLogout }) {
-  const { userId, email } = session;
-  const [txs, setTxs]         = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [netError, setNetError] = useState(null); // error de red
+  const {userId, email} = session;
+  const [txs, setTxs]             = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [netError, setNetError]   = useState(null);
+  const [tab, setTab]             = useState('dashboard');
+  const [showAddTx, setShowAddTx] = useState(false);
+  const [showLogout, setShowLogout] = useState(false);
+  const [showWalletMgr, setShowWalletMgr] = useState(false);
+  const [deleteId, setDeleteId]   = useState(null);
+  const [filterType, setFilterType] = useState('all');
+  const [filterCat, setFilterCat]  = useState('all');
+  const [query, setQuery]          = useState('');
+  const [toast, setToast]          = useState(null);
+  const [activeWalletKeys, setActiveWalletKeys] = useState(['efectivo']);
 
-  // Cargar transacciones del backend al montar
-  useEffect(() => {
-    txApi.getAll()
-      .then(data => { setTxs(data.transactions || []); setLoading(false); })
-      .catch(e  => { setNetError(e.message); setLoading(false); });
-  }, [userId]);
+  // Load data
+  useEffect(()=>{
+    Promise.all([
+      txApi.getAll(),
+      walletApi.getActive().catch(()=>({wallets:['efectivo']})),
+    ]).then(([txData, wData])=>{
+      setTxs(txData.transactions||[]);
+      // Map backend keys to frontend keys
+      const map = {manual:'efectivo', mercadopago:'mp', lemoncash:'lemoncash',
+        uala:'uala', brubank:'brubank', naranjaX:'naranjax', paypal:'paypal',
+        santander:'santander', bbva:'bbva', galicia:'galicia', nacion:'nacion',
+        macro:'macro', hsbc:'hsbc', icbc:'icbc', supervielle:'supervielle'};
+      const mapped = (wData.wallets||['efectivo']).map(k=>map[k]||k);
+      if(!mapped.includes('efectivo')) mapped.unshift('efectivo');
+      setActiveWalletKeys(mapped);
+      setLoading(false);
+    }).catch(e=>{setNetError(e.message);setLoading(false);});
+  },[userId]);
 
-  const [tab, setTab]                       = useState("dashboard");
-  const [showModal, setShowModal]           = useState(false);
-  const [showLogout, setShowLogout]         = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
-  const [apiDone, setApiDone]               = useState(false);
-  const [syncing, setSyncing]               = useState(false);
-  const [syncStep, setSyncStep]             = useState(0);
-  const [filterType, setFilterType]         = useState("all");
-  const [filterCat, setFilterCat]           = useState("all");
-  const [query, setQuery]                   = useState("");
-  const [toast, setToast]                   = useState(null);
-  const [form, setForm] = useState({
-    type:"expense", amount:"", category:"Alimentación",
-    description:"", date:new Date().toISOString().split("T")[0],
-    source:"digital", wallet:"mercadopago", recurring:false, dueDay:"",
-  });
+  // Computed
+  const income   = txs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const expenses = txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const balance  = income-expenses;
+  const savingsRate = income>0?Math.max(0,Math.round((balance/income)*100)):0;
 
-  /* ── Computed ── */
-  const income   = txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const expenses = txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const balance  = income - expenses;
-  const savingsRate = income>0 ? Math.max(0,Math.round((balance/income)*100)) : 0;
-
-  // Slot machine animated values for the hero
   const slotBalance  = useSlotMachine(balance);
   const slotIncome   = useSlotMachine(income);
   const slotExpenses = useSlotMachine(expenses);
 
-  // Component: renders a number with slot machine slide animation.
-  // La duración del slide se adapta: ticks lentos = slide largo (perceptible),
-  // ticks rápidos = slide muy corto (se funde en el movimiento general).
-  const SlotNumber = ({ slot, style }) => (
-    <span className="slot-wrap" style={style}>
-      <span
-        key={slot.animKey}
-        className="slot-inner"
-        style={{
-          animation: slot.dir !== 0
-            ? `${slot.dir > 0 ? 'slotUp' : 'slotDown'} 0.12s ease-out both`
-            : 'none',
-        }}>
-        {fARS(slot.val)}
-      </span>
-    </span>
-  );
+  const walletBalance = useCallback(wid=>{
+    const wt = txs.filter(t=>(t.wallet===wid)||(wid==='efectivo'&&t.wallet==='manual'));
+    return wt.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0)
+          -wt.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  },[txs]);
 
-  const byCat = EXPENSE_CATS
-    .map(cat=>({ name:cat, color:CAT_META[cat]?.color,
-      value:txs.filter(t=>t.type==="expense"&&t.category===cat).reduce((s,t)=>s+t.amount,0) }))
-    .filter(d=>d.value>0)
-    .sort((a,b)=>b.value-a.value);
+  // Maps wallet key (frontend) → backend key
+  const toBackendKey = k => ({
+    efectivo:'manual',mp:'mercadopago',lemoncash:'lemoncash',uala:'uala',
+    brubank:'brubank',naranjax:'naranjaX',paypal:'paypal',
+    santander:'santander',bbva:'bbva',galicia:'galicia',nacion:'nacion',
+    macro:'macro',hsbc:'hsbc',icbc:'icbc',supervielle:'supervielle',
+  }[k]||k);
 
-  const walletBalance = useCallback(key => {
-    const wt = txs.filter(t=>t.wallet===key);
-    return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
-          -wt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  }, [txs]);
+  const saveWallets = async keys => {
+    try {
+      await walletApi.save(keys.map(toBackendKey));
+      setActiveWalletKeys(keys);
+      setShowWalletMgr(false);
+      showToastFn('Billeteras guardadas ✓');
+    } catch(e){ showToastFn(e.message||'Error al guardar',false); }
+  };
 
-  const walletTotals = ["manual","mercadopago","lemoncash"].map(k=>({
-    name:WALLETS[k].label,
-    value:txs.filter(t=>t.wallet===k).reduce((s,t)=>s+t.amount,0),
-    color:WALLETS[k].color,
-  })).filter(d=>d.value>0);
-  const walletTotal = walletTotals.reduce((s,d)=>s+d.value,0);
+  const byCat = CATEGORIES
+    .filter(c=>c.type==='expense')
+    .map(c=>({...c,val:txs.filter(t=>t.type==='expense'&&t.category===c.id).reduce((s,t)=>s+t.amount,0)}))
+    .filter(d=>d.val>0).sort((a,b)=>b.val-a.val);
 
-  // Gastos fijos
-  const recurringExpenses = txs.filter(t=>t.type==="expense"&&t.recurring);
-  const monthlyCommitted  = Array.from(
-    new Map(recurringExpenses.map(t=>[`${t.description}__${t.amount}`,t])).values()
-  ).reduce((s,t)=>s+t.amount,0);
+  // Source distribution using activeWalletKeys
+  const sourceSlices = activeWalletKeys.map(wid=>{
+    const bank = wid==='efectivo' ? {name:'Efectivo',color:'#4ab38a'} : ARG_BANKS.find(b=>b.id===wid);
+    const val = Math.max(0,walletBalance(wid));
+    return {id:wid,label:bank?.name||wid,color:bank?.color||'#6c5cf0',val};
+  }).filter(s=>s.val>0);
+  const sourceTotal = sourceSlices.reduce((s,d)=>s+d.val,0);
 
-  // Today's day-of-month for due date detection
+  // Recurring
+  const recurringExp = txs.filter(t=>t.type==='expense'&&t.recurring);
+  const uniqueRecurring = Array.from(
+    new Map(recurringExp.map(t=>[`${t.description}__${t.amount}`,t])).values()
+  ).sort((a,b)=>(Number(a.dueDay)||99)-(Number(b.dueDay)||99));
+  const monthlyCommitted = uniqueRecurring.reduce((s,t)=>s+t.amount,0);
   const todayDay = new Date().getDate();
-  const isDueSoon = d => d && (Number(d) - todayDay) >= 0 && (Number(d) - todayDay) <= 7;
+  const isDueSoon = d=>d&&(Number(d)-todayDay)>=0&&(Number(d)-todayDay)<=7;
 
-  // Monthly evolution — last 6 months
+  // Monthly trend
   const monthlyData = (() => {
-    const result = [];
-    for (let i=5; i>=0; i--) {
-      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
-      const y=d.getFullYear(), m=d.getMonth();
-      const label = d.toLocaleDateString('es-AR',{month:'short'}).replace('.','').toUpperCase();
-      const mTxs  = txs.filter(t=>{ const td=new Date(t.date+"T00:00:00"); return td.getFullYear()===y&&td.getMonth()===m; });
-      const inc = mTxs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-      const exp = mTxs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-      result.push({ label, Ingresos:inc, Gastos:exp, net:inc-exp });
+    const r=[];
+    for(let i=5;i>=0;i--){
+      const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
+      const y=d.getFullYear(),m=d.getMonth();
+      const lbl=d.toLocaleDateString('es-AR',{month:'short'}).replace('.','').toUpperCase();
+      const mTxs=txs.filter(t=>{const td=new Date(t.date+'T00:00:00');return td.getFullYear()===y&&td.getMonth()===m;});
+      const inc=mTxs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+      const exp=mTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+      r.push({label:lbl,Ingresos:inc,Gastos:exp,net:inc-exp});
     }
-    return result;
+    return r;
   })();
 
-  // Unique categories with transactions
-  const availableCats = ["all",...Array.from(new Set(txs.map(t=>t.category))).sort()];
+  const availableCats = ['all',...Array.from(new Set(txs.map(t=>t.category))).sort()];
 
   const filtered = txs.filter(t=>{
-    const mt = filterType==="all" ? true
-             : filterType==="recurring" ? !!t.recurring
-             : t.type===filterType;
-    const mc = filterCat==="all"||t.category===filterCat;
-    const mq = t.description.toLowerCase().includes(query.toLowerCase())||
-               t.category.toLowerCase().includes(query.toLowerCase());
+    const mt=filterType==='all'?true:filterType==='recurring'?!!t.recurring:t.type===filterType;
+    const mc=filterCat==='all'||t.category===filterCat;
+    const mq=t.description?.toLowerCase().includes(query.toLowerCase())||
+             t.category?.toLowerCase().includes(query.toLowerCase());
     return mt&&mc&&mq;
   });
 
-  /* ── Actions ── */
-  const showToast = (msg,ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),3000); };
+  // Actions
+  const showToastFn = (msg,ok=true)=>{setToast({msg,ok});setTimeout(()=>setToast(null),3000);};
 
-  const addTx = async () => {
-    if (!form.amount||!form.description) return;
-    const rw = form.source==="cash"?"manual":form.wallet;
-    const payload = {
-      ...form,
-      amount:      parseFloat(form.amount),
-      wallet_name: rw,
-      source:      form.source,
-      dueDay:      form.recurring ? form.dueDay : "",
-    };
+  const addTx = async payload => {
+    const backendWallet = toBackendKey(payload.wallet);
+    const body = {...payload, wallet_name:backendWallet, amount:parseFloat(payload.amount)};
     try {
-      const data = await txApi.create(payload);
-      // El backend devuelve el movimiento con su ID de PostgreSQL
+      const data = await txApi.create(body);
       const newTx = {
-        ...payload,
-        id:      data.transaction.id,
-        wallet:  rw,
-        date:    form.date,
+        ...body, id:data.transaction.id,
+        wallet:backendWallet==='manual'?'manual':payload.wallet,
+        date:payload.date, amount:parseFloat(payload.amount),
       };
       setTxs(p=>[newTx,...p]);
-      setShowModal(false);
-      setForm({type:"expense",amount:"",category:"Alimentación",description:"",
-               date:new Date().toISOString().split("T")[0],source:"digital",
-               wallet:"mercadopago",recurring:false,dueDay:""});
-      showToast("Movimiento guardado ✓");
-    } catch(e) {
-      showToast(e.message || "Error al guardar", false);
-    }
+      setShowAddTx(false);
+      showToastFn('Movimiento guardado ✓');
+    } catch(e){ showToastFn(e.message||'Error al guardar',false); }
   };
 
-  const confirmDelete = id => setDeleteConfirmId(id);
   const doDelete = async () => {
     try {
-      await txApi.delete(deleteConfirmId);
-      setTxs(p=>p.filter(t=>t.id!==deleteConfirmId));
-      setDeleteConfirmId(null);
-      showToast("Movimiento eliminado", false);
-    } catch(e) {
-      showToast(e.message || "Error al eliminar", false);
-      setDeleteConfirmId(null);
-    }
+      await txApi.delete(deleteId);
+      setTxs(p=>p.filter(t=>t.id!==deleteId));
+      setDeleteId(null);
+      showToastFn('Movimiento eliminado',false);
+    } catch(e){ showToastFn(e.message||'Error',false); setDeleteId(null); }
   };
 
-  const simulateAPI = () => {
-    if (apiDone||syncing) return;
-    setSyncing(true);
-    let step=0;
-    const tick=()=>{ setSyncStep(step); step++;
-      if (step<SYNC_STEPS.length) setTimeout(tick,550);
-      else {
-        setTxs(p=>{ const ids=new Set(p.map(t=>t.id)); return [...MOCK_API.filter(t=>!ids.has(t.id)),...p]; });
-        setApiDone(true); setSyncing(false); showToast("8 movimientos importados ✓");
-      }
-    };
-    tick();
-  };
-
-  /* ── CSS ── */
-  const css = `
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#020617;}
-    ::-webkit-scrollbar{width:3px;} ::-webkit-scrollbar-thumb{background:#334155;border-radius:2px;}
-    .fc{font-family:'Plus Jakarta Sans',sans-serif;min-height:100vh;background:#020617;color:#F1F5F9;}
-    .glass{background:rgba(15,23,42,.9);backdrop-filter:blur(16px);border-bottom:1px solid #1E293B;}
-    .glass-hi{background:rgba(22,32,52,.97);border:1px solid rgba(148,163,184,.1);}
-    .card{background:#0F172A;border:1px solid #1E293B;border-radius:16px;padding:20px;}
-    .grad-bal{background:linear-gradient(140deg,#1D4ED8 0%,#6D28D9 100%);}
-    .grad-fab{background:linear-gradient(135deg,#6366F1,#8B5CF6);box-shadow:0 8px 28px rgba(99,102,241,.5);}
-    .tab-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;
-      border-radius:12px;border:1px solid transparent;cursor:pointer;font-size:11px;font-weight:600;
-      background:none;color:#475569;transition:all .2s;white-space:nowrap;}
-    .tab-btn:hover{color:#94A3B8;}
-    .tab-active{background:rgba(99,102,241,.15)!important;color:#818CF8!important;border-color:rgba(99,102,241,.3)!important;}
-    .tx-wrap:hover .tx-del-btn{opacity:1;}
-    .tx-del-btn{opacity:0;transition:opacity .2s;}
-    .tx-row{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #1E293B;background:#0F172A;}
-    .tx-row:last-child{border-bottom:none;}
-    .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;}
-    .input-fc{width:100%;background:#1E293B;border:1px solid #334155;border-radius:12px;
-      padding:12px 16px;font-size:14px;color:#F1F5F9;outline:none;font-family:inherit;transition:border-color .2s;}
-    .input-fc:focus{border-color:#6366F1;} .input-fc::placeholder{color:#475569;}
-    .btn-p{width:100%;padding:14px;border-radius:14px;font-size:15px;font-weight:700;color:#fff;
-      border:none;cursor:pointer;font-family:inherit;transition:opacity .2s,transform .15s;}
-    .btn-p:hover{opacity:.9;} .btn-p:active{transform:scale(.98);}
-    .btn-p:disabled{opacity:.35;cursor:not-allowed;}
-    .pill{display:flex;background:#1E293B;border-radius:12px;padding:4px;gap:4px;}
-    .pill-o{flex:1;padding:10px;border-radius:10px;font-size:13px;font-weight:600;border:none;
-      cursor:pointer;font-family:inherit;color:#64748B;background:none;transition:all .2s;}
-    .fade-in{animation:fu .28s ease-out both;}
-    @keyframes slotUp   { from{transform:translateY(70%);opacity:0;filter:blur(1.5px)} to{transform:translateY(0);opacity:1;filter:blur(0)} }
-    @keyframes slotDown { from{transform:translateY(-70%);opacity:0;filter:blur(1.5px)} to{transform:translateY(0);opacity:1;filter:blur(0)} }
-    .slot-wrap{display:inline-block;overflow:hidden;vertical-align:bottom;}
-    .slot-inner{display:inline-block;}
-    .slot-wrap{overflow:hidden;display:inline-block;vertical-align:baseline;}
-    .slot-inner{display:inline-block;}
-    @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-    .pb{height:5px;border-radius:99px;background:#1E293B;overflow:hidden;}
-    .pf{height:100%;border-radius:99px;transition:width .6s ease;}
-    .toast{position:fixed;bottom:86px;left:50%;transform:translateX(-50%);z-index:999;
-      padding:10px 18px;border-radius:12px;font-size:13px;font-weight:600;white-space:nowrap;
-      pointer-events:none;animation:ti .3s ease-out;}
-    @keyframes ti{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-    select.input-fc option{background:#1E293B;}
-    input[type=date].input-fc::-webkit-calendar-picker-indicator{filter:invert(.5);}
-    /* Mobile: fecha más compacta para evitar superposición con fuente */
-    @media(max-width:420px){
-      .date-source-grid{grid-template-columns:1fr!important;}
-      .date-input-wrap input[type=date]{font-size:12px;padding:10px 8px;}
-    }
-    .overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;
-      justify-content:center;padding:16px 20px;background:rgba(0,0,0,.8);backdrop-filter:blur(6px);}
-    .wrap{max-width:1180px;margin:0 auto;padding:16px 20px 96px;}
-    .db-grid{display:grid;grid-template-columns:1fr;gap:14px;}
-    .col{display:flex;flex-direction:column;gap:14px;}
-    /* Charts: mobile = column (bars first), desktop = 2 cols */
-    .ch-wrap{display:flex;flex-direction:column;gap:14px;}
-    .ch-top{display:flex;flex-direction:column;gap:14px;}
-    @media(min-width:720px){
-      .wrap{padding:22px 28px 80px;}
-      .db-grid{grid-template-columns:1fr 1fr;gap:20px;align-items:start;}
-      .ch-wrap{flex-direction:row;align-items:flex-start;}
-      .ch-top{flex:1;}
-    }
-    @media(min-width:1060px){ .db-grid{grid-template-columns:430px 1fr;} }
-    input[type=number]::-webkit-inner-spin-button,
-    input[type=number]::-webkit-outer-spin-button{opacity:1;}
-  `;
-
-  /* ── Sub-components ── */
-  const TxIcon = ({cat,size=36}) => {
-    const m=CAT_META[cat]||CAT_META["Otros"], I=m.Icon;
-    return <div style={{width:size,height:size,borderRadius:10,background:m.color+"20",
-        display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-      <I size={Math.round(size*.44)} color={m.color}/></div>;
-  };
-
-  const sourceLabel = tx => {
-    if (tx.source==="cash") return { icon:"💵", text:"Efectivo", color:"#34D399" };
-    const w=WALLETS[tx.wallet];
-    if (w&&tx.wallet!=="manual") return { icon:"💳", text:w.label, color:w.color };
-    return { icon:"💳", text:"Digital", color:"#60A5FA" };
-  };
-
-  /* ── Recurring unique list (for commitments card) ── */
-  const uniqueRecurring = Array.from(
-    new Map(recurringExpenses.map(t=>[`${t.description}__${t.amount}`,t])).values()
-  ).sort((a,b)=> (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
-
-  /* ═══════════════ RENDER ═══════════════ */
-
-  // Pantalla de carga mientras se traen los datos del backend
-  if (loading) return (
-    <div style={{minHeight:"100vh",background:"#020617",display:"flex",
-        alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
-      <div style={{width:44,height:44,border:"3px solid #6366F1",borderTopColor:"transparent",
-          borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-      <p style={{fontSize:13,color:"#64748B",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-        Cargando tus movimientos…
-      </p>
-      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
+  // Loading / error screens
+  if(loading) return (
+    <div style={{minHeight:'100vh',background:'var(--fc-bg)',display:'flex',
+        alignItems:'center',justifyContent:'center',flexDirection:'column',gap:14}}>
+      <Spinner size={36}/>
+      <p style={{fontSize:13,color:'var(--fc-fg-3)',fontFamily:'var(--fc-font-sans)'}}>Cargando tus movimientos…</p>
     </div>
   );
 
-  // Pantalla de error de red
-  if (netError) return (
-    <div style={{minHeight:"100vh",background:"#020617",display:"flex",
-        alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{textAlign:"center",maxWidth:320}}>
-        <WifiOff size={40} color="#F472B6" style={{margin:"0 auto 16px"}}/>
-        <h2 style={{fontSize:18,fontWeight:700,color:"#F1F5F9",marginBottom:8,
-            fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+  if(netError) return (
+    <div style={{minHeight:'100vh',background:'var(--fc-bg)',display:'flex',
+        alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{textAlign:'center',maxWidth:320}}>
+        <Icon name="alert" size={40} style={{color:'var(--fc-pink)',margin:'0 auto 16px',display:'block'}}/>
+        <h2 style={{fontSize:18,fontWeight:700,color:'var(--fc-fg-1)',marginBottom:8,fontFamily:'var(--fc-font-sans)'}}>
           Sin conexión al servidor
         </h2>
-        <p style={{fontSize:13,color:"#64748B",lineHeight:1.6,marginBottom:20,
-            fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-          No se pudo conectar con el backend. Verificá que Railway esté corriendo
-          y que <code style={{color:"#818CF8"}}>VITE_API_URL</code> esté configurado.
-        </p>
-        <p style={{fontSize:12,color:"#475569",fontFamily:"monospace",
-            background:"#0F172A",padding:"8px 12px",borderRadius:8}}>
+        <p style={{fontSize:13,color:'var(--fc-fg-3)',lineHeight:1.6,marginBottom:20,fontFamily:'var(--fc-font-sans)'}}>
           {netError}
         </p>
-        <button onClick={()=>window.location.reload()}
-          style={{marginTop:16,padding:"10px 20px",borderRadius:12,border:"1px solid #6366F1",
-            background:"rgba(99,102,241,.15)",color:"#818CF8",cursor:"pointer",
-            fontSize:13,fontWeight:600,fontFamily:"sans-serif"}}>
+        <button onClick={()=>window.location.reload()} style={{padding:'10px 20px',borderRadius:12,
+            border:'1px solid var(--fc-violet-ring)',background:'var(--fc-violet-tint)',
+            color:'var(--fc-violet-hi)',cursor:'pointer',fontSize:13,fontWeight:600,
+            fontFamily:'var(--fc-font-sans)'}}>
           Reintentar
         </button>
       </div>
     </div>
   );
 
+  const TABS = [
+    {id:'dashboard',label:'Dashboard',icon:'dashboard'},
+    {id:'charts',   label:'Gráficos', icon:'chart'},
+    {id:'records',  label:'Registros',icon:'list'},
+  ];
+
   return (
-    <div className="fc">
-      <style>{css}</style>
+    <div style={{minHeight:'100vh',background:'var(--fc-bg)',fontFamily:'var(--fc-font-sans)'}}>
 
-      {/* HEADER */}
-      <header className="glass" style={{position:"sticky",top:0,zIndex:40,padding:"11px 20px",
-          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:9}}>
-          <div style={{width:32,height:32,borderRadius:10,
-              background:"linear-gradient(135deg,#6366F1,#8B5CF6)",
-              display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <Wallet size={16} color="#fff"/>
+      {/* TOP BAR */}
+      <div style={{display:'flex',alignItems:'center',gap:14,padding:'18px 28px',
+          background:'transparent',position:'sticky',top:0,zIndex:100,
+          backdropFilter:'blur(16px)',background:'rgba(12,14,26,0.85)',
+          borderBottom:'1px solid var(--fc-border)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginRight:'auto'}}>
+          <div style={{width:42,height:42,borderRadius:14,background:'var(--fc-grad-hero)',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              boxShadow:'var(--fc-shadow-violet)'}}>
+            <Icon name="wallet" size={20} style={{color:'#fff'}}/>
           </div>
-          <span style={{fontWeight:800,fontSize:18,letterSpacing:"-.5px"}}>
-            Flow<span style={{color:"#818CF8"}}>Cash</span>
-          </span>
+          <div style={{fontSize:20,fontWeight:700,letterSpacing:'-0.02em'}}>
+            <span style={{color:'var(--fc-fg-1)'}}>Flow</span>
+            <span style={{color:'var(--fc-violet-hi)'}}>Cash</span>
+          </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:13,fontWeight:700,padding:"5px 13px",borderRadius:20,
-            background:balance>=0?"rgba(52,211,153,.12)":"rgba(244,114,182,.12)",
-            color:balance>=0?"#34D399":"#F472B6",
-            border:`1px solid ${balance>=0?"rgba(52,211,153,.3)":"rgba(244,114,182,.3)"}`}}>
-            {balance>=0?"▲":"▼"} {fARS(Math.abs(balance))}
-          </span>
-          <div style={{width:30,height:30,borderRadius:9,background:"rgba(99,102,241,.15)",
-              border:"1px solid rgba(99,102,241,.25)",display:"flex",alignItems:"center",
-              justifyContent:"center"}} title={email}>
-            <User size={14} color="#818CF8"/>
-          </div>
-          <button onClick={()=>setShowLogout(true)}
-            style={{width:30,height:30,borderRadius:9,background:"rgba(244,114,182,.1)",
-              border:"1px solid rgba(244,114,182,.2)",display:"flex",alignItems:"center",
-              justifyContent:"center",cursor:"pointer",transition:"all .2s"}}
-            onMouseEnter={e=>e.currentTarget.style.background="rgba(244,114,182,.2)"}
-            onMouseLeave={e=>e.currentTarget.style.background="rgba(244,114,182,.1)"}>
-            <LogOut size={13} color="#F472B6"/>
+
+        {/* Balance pill */}
+        <div style={{display:'inline-flex',alignItems:'center',gap:8,padding:'9px 16px',
+            borderRadius:12,fontWeight:700,fontSize:14,fontVariantNumeric:'tabular-nums',
+            background:balance>=0?'var(--fc-green-tint)':'var(--fc-pink-tint)',
+            border:`1px solid ${balance>=0?'var(--fc-green-ring)':'var(--fc-pink-ring)'}`,
+            color:balance>=0?'var(--fc-green)':'var(--fc-pink)'}}>
+          <Icon name={balance>=0?'trendUp':'trendDown'} size={14} stroke={2}/>
+          {fmt(balance,balance>=0?'+':'−')}
+        </div>
+
+        {/* Icon buttons */}
+        {[
+          {icon:'bank',   title:'Mis billeteras', onClick:()=>setShowWalletMgr(true),  danger:false},
+          {icon:'user',   title:email,            onClick:null,                          danger:false},
+          {icon:'logout', title:'Cerrar sesión',  onClick:()=>setShowLogout(true),       danger:true},
+        ].map(({icon,title,onClick,danger})=>(
+          <button key={icon} title={title} onClick={onClick||undefined}
+            style={{width:44,height:44,borderRadius:14,display:'inline-flex',alignItems:'center',
+              justifyContent:'center',border:`1px solid ${danger?'var(--fc-pink-ring)':'var(--fc-violet-ring)'}`,
+              background:danger?'var(--fc-pink-tint)':'var(--fc-violet-tint)',
+              color:danger?'var(--fc-pink)':'var(--fc-violet-hi)',
+              cursor:onClick?'pointer':'default',transition:'all var(--fc-dur-fast) var(--fc-ease)'}}>
+            <Icon name={icon} size={20}/>
           </button>
-        </div>
-      </header>
+        ))}
+      </div>
 
-      {/* NAV */}
-      <nav className="glass" style={{position:"sticky",top:56,zIndex:30,padding:"7px 12px",
-          borderTop:"1px solid #1E293B"}}>
-        <div style={{display:"flex",gap:3,maxWidth:1180,margin:"0 auto"}}>
-          {[{id:"dashboard",label:"Dashboard",Icon:LayoutDashboard},
-            {id:"charts",   label:"Gráficos", Icon:BarChart2},
-            {id:"records",  label:"Registros",Icon:List}].map(({id,label,Icon:Ic})=>(
-            <button key={id} className={`tab-btn ${tab===id?"tab-active":""}`} onClick={()=>setTab(id)}>
-              <Ic size={16}/><span>{label}</span>
-            </button>
-          ))}
-        </div>
-      </nav>
+      {/* TAB BAR */}
+      <div style={{display:'flex',gap:6,background:'var(--fc-surface)',
+          border:'1px solid var(--fc-border)',borderRadius:18,padding:6,
+          margin:'20px 28px 0'}}>
+        {TABS.map(t=>(
+          <div key={t.id} onClick={()=>setTab(t.id)}
+            style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',gap:10,
+              padding:'13px 12px',borderRadius:14,fontSize:14,fontWeight:600,
+              color:tab===t.id?'var(--fc-violet-hi)':'var(--fc-fg-3)',
+              background:tab===t.id?'var(--fc-violet-tint)':'transparent',
+              cursor:'pointer',transition:'all var(--fc-dur-fast) var(--fc-ease)'}}>
+            <Icon name={t.icon} size={17}/>
+            {t.label}
+          </div>
+        ))}
+      </div>
 
-      <main className="wrap fade-in" key={tab}>
+      {/* MAIN */}
+      <div style={{padding:'20px 28px 120px'}} key={tab} className="fc-anim">
 
-        {/* ═══ DASHBOARD ═══ */}
-        {tab==="dashboard" && (
-          <div className="db-grid">
-            {/* LEFT */}
-            <div className="col">
-              {/* Hero with count-up */}
-              <div className="grad-bal" style={{borderRadius:20,padding:26,position:"relative",overflow:"hidden"}}>
-                <div style={{position:"absolute",top:-48,right:-48,width:170,height:170,
-                  background:"radial-gradient(circle,rgba(255,255,255,.1),transparent)",borderRadius:"50%"}}/>
-                <p style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",letterSpacing:1.3,textTransform:"uppercase"}}>
-                  Saldo Total
-                </p>
-                {/* Slot machine balance number */}
-                <p style={{fontSize:42,fontWeight:800,color:"#fff",margin:"8px 0 4px",letterSpacing:"-1.5px"}}>
-                  <SlotNumber slot={slotBalance}/>
-                </p>
-                <p style={{fontSize:12,color:"rgba(255,255,255,.45)",marginBottom:22}}>
-                  {txs.length} movimientos registrados
-                </p>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                  {[{label:"Ingresos del mes",slot:slotIncome,Icon:TrendingUp,c:"rgba(52,211,153,.85)"},
-                    {label:"Gastos del mes",slot:slotExpenses,Icon:TrendingDown,c:"rgba(244,114,182,.85)"}].map(({label,slot,Icon:Ic,c})=>(
-                    <div key={label} style={{background:"rgba(255,255,255,.1)",borderRadius:14,padding:"13px 14px"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
-                        <div style={{width:22,height:22,borderRadius:7,background:"rgba(255,255,255,.15)",
-                            display:"flex",alignItems:"center",justifyContent:"center"}}><Ic size={12} color="#fff"/></div>
-                        <p style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:600}}>{label}</p>
-                      </div>
-                      <p style={{fontSize:18,fontWeight:800,color:c,letterSpacing:"-.3px"}}>
-                        <SlotNumber slot={slot}/>
-                      </p>
-                    </div>
-                  ))}
-                </div>
+        {/* ── DASHBOARD ── */}
+        {tab==='dashboard' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,alignItems:'start'}}>
+            {/* Hero */}
+            <div style={{position:'relative',overflow:'hidden',borderRadius:28,padding:'28px 28px 24px',
+                background:'var(--fc-grad-hero)',boxShadow:'var(--fc-shadow-violet)',
+                color:'#fff',gridColumn:'1/-1'}}>
+              <div style={{position:'absolute',right:-60,top:-60,width:220,height:220,
+                  borderRadius:'50%',background:'rgba(255,255,255,0.10)',filter:'blur(8px)'}}/>
+              <div style={{fontSize:11,letterSpacing:'0.1em',textTransform:'uppercase',
+                  opacity:.78,fontWeight:600,marginBottom:8}}>Saldo total</div>
+              <div style={{fontSize:56,fontWeight:700,letterSpacing:'-0.02em',lineHeight:1,
+                  fontVariantNumeric:'tabular-nums',marginBottom:6}}>
+                <SlotNumber slot={slotBalance} prefix=""/>
               </div>
-
-              {/* Wallet balances */}
-              <div className="card">
-                <p style={{fontSize:13,fontWeight:700,marginBottom:3}}>Saldo por Billetera</p>
-                <p style={{fontSize:11,color:"#64748B",marginBottom:14}}>Balance neto por fuente (ingresos − gastos)</p>
-                <div style={{display:"flex",flexDirection:"column",gap:9}}>
-                  {["manual",...Object.keys(WALLETS).filter(k=>k!=="manual"&&txs.some(t=>t.wallet===k))].map(key=>{
-                    const bal=walletBalance(key), w=WALLETS[key], WI=w.Icon;
-                    const subs={manual:"Efectivo / sin billetera asignada",mercadopago:"Billetera digital Argentina",lemoncash:"Cripto + ARS"};
-                    return (
-                      <div key={key} style={{display:"flex",alignItems:"center",gap:12,
-                          background:"#1E293B",borderRadius:13,padding:"12px 14px"}}>
-                        <div style={{width:36,height:36,borderRadius:10,background:w.color+"18",
-                            border:`1px solid ${w.color}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                          <WI size={16} color={w.color}/>
-                        </div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:13,fontWeight:600,color:"#CBD5E1"}}>{w.label}</p>
-                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{subs[key]}</p>
-                        </div>
-                        <div style={{textAlign:"right",flexShrink:0}}>
-                          <p style={{fontSize:15,fontWeight:800,color:bal>=0?w.color:"#F472B6"}}>
-                            {bal>=0?"+":""}{fARS(bal)}
-                          </p>
-                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{bal>=0?"superávit":"déficit"}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {txs.length>0 && (
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                        padding:"8px 14px",borderRadius:10,background:"rgba(99,102,241,.07)",
-                        border:"1px solid rgba(99,102,241,.15)",marginTop:2}}>
-                      <span style={{fontSize:11,fontWeight:600,color:"#64748B"}}>Total verificado</span>
-                      <span style={{fontSize:13,fontWeight:800,color:balance>=0?"#34D399":"#F472B6"}}>
-                        {balance>=0?"+":""}{fARS(balance)}
+              <div style={{fontSize:13,opacity:.7,marginBottom:24}}>
+                {txs.length} movimientos registrados
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+                {[
+                  {slot:slotIncome,  label:'Ingresos del mes', icon:'trendUp',   color:'rgba(74,179,138,.9)'},
+                  {slot:slotExpenses,label:'Gastos del mes',   icon:'trendDown',  color:'rgba(217,102,135,.9)'},
+                ].map(({slot,label,icon,color})=>(
+                  <div key={label} style={{background:'rgba(255,255,255,.1)',border:'1px solid rgba(255,255,255,.14)',
+                      borderRadius:18,padding:'14px 16px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                      <span style={{width:32,height:32,borderRadius:10,background:'rgba(255,255,255,.14)',
+                          display:'inline-flex',alignItems:'center',justifyContent:'center'}}>
+                        <Icon name={icon} size={16} stroke={2} style={{color:'#fff'}}/>
                       </span>
+                      <span style={{fontSize:12,opacity:.9}}>{label}</span>
                     </div>
-                  )}
-                </div>
+                    <div style={{fontSize:26,fontWeight:700,color,fontVariantNumeric:'tabular-nums'}}>
+                      <SlotNumber slot={slot} prefix=""/>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* RIGHT */}
-            <div className="col">
-              {/* Savings */}
-              <div className="card">
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-                  <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Tasa de ahorro</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Ingresos disponibles tras gastos</p>
-                  </div>
-                  <div style={{borderRadius:12,padding:"7px 14px",textAlign:"center",
-                      background:savingsRate>=50?"rgba(52,211,153,.1)":savingsRate>=20?"rgba(251,191,36,.1)":"rgba(244,114,182,.1)"}}>
-                    <div style={{fontSize:28,fontWeight:800,lineHeight:1,
-                      color:savingsRate>=50?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"}}>
-                      {savingsRate}%
-                    </div>
-                    <div style={{fontSize:9,fontWeight:700,color:"#64748B",marginTop:3,textTransform:"uppercase",letterSpacing:".4px"}}>
-                      {savingsRate>=50?"Excelente":savingsRate>=20?"Buena":"Mejorable"}
-                    </div>
-                  </div>
-                </div>
-                <div className="pb"><div className="pf" style={{
-                  width:`${Math.min(100,savingsRate)}%`,
-                  background:savingsRate>=50?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"
-                }}/></div>
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:7,fontSize:10,color:"#334155"}}>
-                  <span>0%</span><span style={{color:"#475569"}}>Meta: 20%+</span><span>100%</span>
-                </div>
-              </div>
-
-              {/* Compromisos del mes — mejorado con dueDay */}
-              <div className="card">
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-                  <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Compromisos del mes</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Gastos fijos que se repiten</p>
-                  </div>
-                  <div style={{textAlign:"right",flexShrink:0}}>
-                    <p style={{fontSize:18,fontWeight:800,color:"#F472B6"}}>{fARS(monthlyCommitted)}</p>
-                    <p style={{fontSize:10,color:"#64748B",marginTop:1}}>comprometido</p>
-                  </div>
-                </div>
-                {uniqueRecurring.length===0 ? (
-                  <div style={{textAlign:"center",padding:"14px 0",color:"#475569",fontSize:12,lineHeight:1.6}}>
-                    Sin gastos fijos. Al cargar un gasto, activá{" "}
-                    <span style={{color:"#818CF8"}}>"Fijo mensual"</span>.
-                  </div>
-                ) : (
-                  <>
-                    <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:12}}>
-                      {uniqueRecurring.slice(0,6).map(tx=>{
-                        const m=CAT_META[tx.category]||CAT_META["Otros"], I=m.Icon;
-                        const soon = isDueSoon(tx.dueDay);
-                        return (
-                          <div key={tx.id} style={{display:"flex",alignItems:"center",gap:10,
-                              background: soon?"rgba(251,191,36,.06)":"#1E293B",
-                              border: soon?"1px solid rgba(251,191,36,.25)":"1px solid transparent",
-                              borderRadius:11,padding:"10px 12px"}}>
-                            <div style={{width:30,height:30,borderRadius:8,background:m.color+"20",
-                                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                              <I size={13} color={m.color}/>
-                            </div>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                <p style={{fontSize:12,fontWeight:600,color:"#CBD5E1",overflow:"hidden",
-                                    textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.description}</p>
-                                {soon && <AlertTriangle size={11} color="#FBBF24"/>}
-                              </div>
-                              <p style={{fontSize:10,color:"#475569",marginTop:1}}>
-                                {tx.category}
-                                {tx.dueDay ? <span style={{color:soon?"#FBBF24":"#64748B"}}> · vence día {tx.dueDay}</span> : ""}
-                              </p>
-                            </div>
-                            <div style={{flexShrink:0,textAlign:"right"}}>
-                              <p style={{fontSize:13,fontWeight:700,color:"#F472B6"}}>-{fARS(tx.amount)}</p>
-                              <p style={{fontSize:9,fontWeight:600,color:"#F472B6",background:"rgba(244,114,182,.1)",
-                                  borderRadius:5,padding:"1px 5px",marginTop:2}}>📅 mensual</p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {income>0 && (
-                      <div>
-                        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748B",marginBottom:5}}>
-                          <span>Impacto sobre ingresos</span>
-                          <span style={{color:"#F472B6",fontWeight:600}}>
-                            {Math.round((monthlyCommitted/income)*100)}%
-                          </span>
-                        </div>
-                        <div className="pb">
-                          <div className="pf" style={{width:`${Math.min(100,Math.round((monthlyCommitted/income)*100))}%`,
-                            background:"linear-gradient(to right,#F472B6,#FB7185)"}}/>
-                        </div>
+            {/* Saldo por billetera */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',
+                borderRadius:24,padding:24}}>
+              <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Saldo por billetera</h2>
+              <p style={{fontSize:12,color:'var(--fc-fg-3)',marginBottom:16}}>Balance neto por fuente</p>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {activeWalletKeys.map(wid=>{
+                  const bank=wid==='efectivo'?{name:'Efectivo',color:'#4ab38a',type:'cash'}:ARG_BANKS.find(b=>b.id===wid);
+                  if(!bank) return null;
+                  const bal=walletBalance(wid);
+                  return (
+                    <div key={wid} style={{display:'flex',alignItems:'center',gap:12,
+                        background:'var(--fc-surface-2)',borderRadius:14,padding:'12px 14px'}}>
+                      <BankBadge bankId={wid} size={36}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{fontSize:13,fontWeight:600,color:'var(--fc-fg-1)'}}>{bank.name}</p>
+                        <p style={{fontSize:11,color:'var(--fc-fg-3)',marginTop:1}}>{bank.type}</p>
                       </div>
-                    )}
-                  </>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <p style={{fontSize:14,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                            color:bal>=0?bank.color:'var(--fc-pink)'}}>
+                          {fmt(bal,bal>=0?'+':'−')}
+                        </p>
+                        <p style={{fontSize:10,color:'var(--fc-fg-3)',marginTop:2}}>
+                          {bal>=0?'superávit':'déficit'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+                {txs.length>0 && (
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                      padding:'8px 14px',borderRadius:11,background:'var(--fc-violet-tint)',
+                      border:'1px solid var(--fc-violet-ring)',marginTop:4}}>
+                    <span style={{fontSize:11,fontWeight:600,color:'var(--fc-fg-3)'}}>Total verificado</span>
+                    <span style={{fontSize:13,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                        color:balance>=0?'var(--fc-green)':'var(--fc-pink)'}}>
+                      {fmt(balance,balance>=0?'+':'−')}
+                    </span>
+                  </div>
                 )}
               </div>
+            </div>
 
-              {/* Recent */}
-              <div className="card" style={{padding:0,overflow:"hidden"}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px 12px"}}>
-                  <p style={{fontSize:13,fontWeight:700}}>Últimos movimientos</p>
-                  <button onClick={()=>setTab("records")}
-                    style={{fontSize:12,color:"#818CF8",background:"none",border:"none",cursor:"pointer",
-                        display:"flex",alignItems:"center",gap:3,fontFamily:"inherit"}}>
-                    Ver todos <ChevronRight size={13}/>
-                  </button>
+            {/* Tasa de ahorro */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:24,padding:24}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+                <div>
+                  <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Tasa de ahorro</h2>
+                  <p style={{fontSize:12,color:'var(--fc-fg-3)'}}>Ingresos disponibles tras gastos</p>
                 </div>
-                {txs.length===0 ? (
-                  <div style={{textAlign:"center",padding:"24px 20px",color:"#475569",fontSize:13}}>
-                    Todavía no hay movimientos. ¡Agregá el primero!
+                <div style={{textAlign:'center',padding:'8px 14px',borderRadius:12,
+                    background:savingsRate>=50?'var(--fc-green-tint)':savingsRate>=20?'var(--fc-amber-tint)':'var(--fc-pink-tint)',
+                    border:`1px solid ${savingsRate>=50?'var(--fc-green-ring)':savingsRate>=20?'rgba(217,152,80,.32)':'var(--fc-pink-ring)'}`}}>
+                  <div style={{fontSize:26,fontWeight:700,lineHeight:1,
+                      color:savingsRate>=50?'var(--fc-green)':savingsRate>=20?'var(--fc-amber)':'var(--fc-pink)'}}>
+                    {savingsRate}%
                   </div>
-                ) : (
-                  <div>
-                    {txs.slice(0,5).map(tx=>(
-                      <div key={tx.id} className="tx-row">
-                        <TxIcon cat={tx.category}/>
-                        <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {tx.description}
-                          </p>
-                          <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
-                            {tx.category} · {fDate(tx.date)} · {tx.source==="cash"?"💵":"💳"}
-                          </p>
+                  <div style={{fontSize:10,fontWeight:700,color:'var(--fc-fg-3)',marginTop:4,textTransform:'uppercase',letterSpacing:'.05em'}}>
+                    {savingsRate>=50?'Excelente':savingsRate>=20?'Buena':'Mejorable'}
+                  </div>
+                </div>
+              </div>
+              <div style={{height:6,background:'var(--fc-surface-2)',borderRadius:99,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:99,transition:'width .6s ease',
+                    width:`${Math.min(100,savingsRate)}%`,
+                    background:savingsRate>=50?'var(--fc-green)':savingsRate>=20?'var(--fc-amber)':'var(--fc-pink)'}}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',marginTop:7,fontSize:11,color:'var(--fc-fg-3)'}}>
+                <span>0%</span><span>Meta: 20%+</span><span>100%</span>
+              </div>
+            </div>
+
+            {/* Compromisos del mes */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:24,padding:24,gridColumn:'1/-1'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+                <div>
+                  <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Compromisos del mes</h2>
+                  <p style={{fontSize:12,color:'var(--fc-fg-3)'}}>Gastos fijos que se repiten</p>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <p style={{fontSize:20,fontWeight:700,color:'var(--fc-pink)',fontVariantNumeric:'tabular-nums'}}>
+                    {fmt(monthlyCommitted,'−')}
+                  </p>
+                  <p style={{fontSize:11,color:'var(--fc-fg-3)',marginTop:2}}>comprometido</p>
+                </div>
+              </div>
+              {uniqueRecurring.length===0 ? (
+                <p style={{fontSize:13,color:'var(--fc-fg-3)',textAlign:'center',padding:'20px 0'}}>
+                  Sin gastos fijos. Al cargar un gasto, activá{' '}
+                  <span style={{color:'var(--fc-violet-hi)',fontWeight:600}}>"Fijo mensual"</span>.
+                </p>
+              ) : (
+                <>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+                    {uniqueRecurring.slice(0,6).map(tx=>{
+                      const cat=CATEGORIES.find(c=>c.id===tx.category);
+                      const soon=isDueSoon(tx.dueDay);
+                      return (
+                        <div key={tx.id} style={{display:'flex',alignItems:'center',gap:10,
+                            background:soon?'var(--fc-amber-tint)':'var(--fc-surface-2)',
+                            border:`1px solid ${soon?'rgba(217,152,80,.32)':'var(--fc-border)'}`,
+                            borderRadius:14,padding:'11px 14px'}}>
+                          <IconTile name={cat?.icon||'wallet'} color={cat?.tone||'muted'} size={34}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{fontSize:12,fontWeight:600,color:'var(--fc-fg-1)',overflow:'hidden',
+                                textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{tx.description}</p>
+                            <p style={{fontSize:10,color:'var(--fc-fg-3)',marginTop:2}}>
+                              {cat?.label}
+                              {tx.dueDay&&<span style={{color:soon?'var(--fc-amber)':'var(--fc-fg-3)'}}> · día {tx.dueDay}</span>}
+                              {soon&&<span style={{color:'var(--fc-amber)'}}> ⚠</span>}
+                            </p>
+                          </div>
+                          <div style={{flexShrink:0,textAlign:'right'}}>
+                            <p style={{fontSize:13,fontWeight:700,color:'var(--fc-pink)',fontVariantNumeric:'tabular-nums'}}>
+                              {fmt(tx.amount,'−')}
+                            </p>
+                          </div>
                         </div>
-                        <span style={{fontSize:13,fontWeight:700,flexShrink:0,
-                            color:tx.type==="income"?"#34D399":"#F472B6"}}>
-                          {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
+                      );
+                    })}
+                  </div>
+                  {income>0 && (
+                    <div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:12,
+                          color:'var(--fc-fg-3)',marginBottom:6}}>
+                        <span>Impacto sobre ingresos</span>
+                        <span style={{color:'var(--fc-pink)',fontWeight:700}}>
+                          {Math.round((monthlyCommitted/income)*100)}%
                         </span>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div style={{height:6,background:'var(--fc-surface-2)',borderRadius:99,overflow:'hidden'}}>
+                        <div style={{height:'100%',borderRadius:99,
+                            width:`${Math.min(100,Math.round((monthlyCommitted/income)*100))}%`,
+                            background:'linear-gradient(to right,var(--fc-pink),var(--fc-pink-hi))',
+                            transition:'width .6s ease'}}/>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Últimos movimientos */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:24,padding:0,overflow:'hidden',gridColumn:'1/-1'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px 16px'}}>
+                <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:0}}>Últimos movimientos</h2>
+                <button onClick={()=>setTab('records')}
+                  style={{fontSize:13,color:'var(--fc-violet-hi)',background:'none',border:'none',
+                    cursor:'pointer',display:'flex',alignItems:'center',gap:4,fontFamily:'var(--fc-font-sans)',fontWeight:600}}>
+                  Ver todos <Icon name="chevronRight" size={14}/>
+                </button>
               </div>
+              {txs.length===0 ? (
+                <div style={{textAlign:'center',padding:'24px',color:'var(--fc-fg-3)',fontSize:13}}>
+                  Todavía no hay movimientos. ¡Agregá el primero!
+                </div>
+              ) : txs.slice(0,5).map(tx=>{
+                const cat=CATEGORIES.find(c=>c.id===tx.category);
+                const isIncome=tx.type==='income';
+                return (
+                  <div key={tx.id} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 24px',
+                      borderTop:'1px solid var(--fc-divider)'}}>
+                    <IconTile name={cat?.icon||'wallet'} color={cat?.tone||'muted'} size={38}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:14,fontWeight:600,color:'var(--fc-fg-1)',overflow:'hidden',
+                          textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{tx.description||tx.concept}</p>
+                      <p style={{fontSize:12,color:'var(--fc-fg-3)',marginTop:3}}>
+                        {cat?.label} · {fmtDate(tx.date)}
+                      </p>
+                    </div>
+                    <div style={{fontSize:15,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                        color:isIncome?'var(--fc-green)':'var(--fc-pink)'}}>
+                      {fmt(tx.amount,isIncome?'+':'−')}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* ═══ CHARTS ═══ */}
-        {tab==="charts" && (
-          <div style={{display:"flex",flexDirection:"column",gap:14}}>
-
-            {/* Row 1: horizontal bars (left) + donut fuentes (right) */}
-            <div className="ch-wrap">
-              {/* Horizontal bars: gastos por categoría */}
-              <div className="ch-top">
-                <div className="card">
-                  <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Gastos por Categoría</p>
-                  <p style={{fontSize:11,color:"#64748B",marginBottom:18}}>Comparativa de egresos</p>
-                  {byCat.length===0 ? (
-                    <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>Sin gastos registrados</div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height={Math.max(180, byCat.length * 46)}>
-                      <BarChart layout="vertical" data={byCat}
-                        margin={{top:4, right:64, left:4, bottom:4}}>
-                        <XAxis type="number" hide/>
-                        <YAxis type="category" dataKey="name"
-                          tick={{fill:"#94A3B8", fontSize:11}} axisLine={false} tickLine={false} width={95}/>
-                        <Tooltip content={<CustomTooltip/>} cursor={{fill:"rgba(99,102,241,.06)"}}/>
-                        <Bar dataKey="value" name="Gasto" radius={[0,7,7,0]} maxBarSize={28}>
-                          {byCat.map((e,i)=><Cell key={i} fill={e.color}/>)}
-                          <LabelList dataKey="value" position="right"
-                            formatter={v=>fARSShort(v)}
-                            style={{fill:"#CBD5E1",fontSize:10,fontWeight:700}}/>
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
-                  {/* Percentage legend below bars */}
-                  {byCat.length>0 && expenses>0 && (
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 12px",marginTop:12}}>
-                      {byCat.map(e=>(
-                        <div key={e.name} style={{display:"flex",alignItems:"center",gap:6,fontSize:11}}>
-                          <div style={{width:8,height:8,borderRadius:"50%",background:e.color,flexShrink:0}}/>
-                          <span style={{color:"#64748B",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {e.name}
-                          </span>
-                          <span style={{fontWeight:700,color:"#CBD5E1",flexShrink:0}}>
-                            {Math.round((e.value/expenses)*100)}%
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Donut: fuentes (right on desktop, below on mobile) */}
-              <div style={{display:"flex",flexDirection:"column",gap:14,flex:"0 0 auto",width:"100%",maxWidth:400}}>
-                <div className="card">
-                  <p style={{fontSize:13,fontWeight:700,marginBottom:18}}>Distribución por Fuente</p>
-                  {walletTotals.length===0 ? (
-                    <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13,
-                        minHeight:220,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                      Sin movimientos registrados
-                    </div>
-                  ) : (
-                    <>
-                      <DonutWithTooltip data={walletTotals} total={walletTotal}/>
-                      <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:10}}>
-                        {walletTotals.map(d=>{
-                          const pct=walletTotal>0?Math.round((d.value/walletTotal)*100):0;
-                          return (
-                            <div key={d.name}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                                <div style={{display:"flex",alignItems:"center",gap:7}}>
-                                  <div style={{width:9,height:9,borderRadius:"50%",background:d.color,flexShrink:0}}/>
-                                  <span style={{fontSize:12,fontWeight:600,color:"#CBD5E1"}}>{d.name}</span>
-                                </div>
-                                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                                  <span style={{fontSize:11,color:"#64748B"}}>{fARS(d.value)}</span>
-                                  <span style={{fontSize:13,fontWeight:800,color:d.color,minWidth:36,textAlign:"right"}}>{pct}%</span>
-                                </div>
-                              </div>
-                              <div className="pb"><div className="pf" style={{width:`${pct}%`,background:d.color}}/></div>
-                            </div>
-                          );
-                        })}
+        {/* ── CHARTS ── */}
+        {tab==='charts' && (
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+            {/* Gastos por categoría — barras */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:24,padding:24}}>
+              <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Gastos por categoría</h2>
+              <p style={{fontSize:12,color:'var(--fc-fg-3)',marginBottom:20}}>
+                {fmt(expenses,'−')} este mes
+              </p>
+              {byCat.length===0 ? (
+                <div style={{textAlign:'center',color:'var(--fc-fg-3)',padding:32,fontSize:13}}>Sin gastos cargados.</div>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  {byCat.map(({id,label,icon,tone,val})=>(
+                    <div key={id}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                        <span style={{display:'inline-flex',alignItems:'center',gap:10,fontSize:13,fontWeight:600,color:'var(--fc-fg-1)'}}>
+                          <IconTile name={icon} color={tone} size={28}/>
+                          {label}
+                        </span>
+                        <span style={{fontSize:13,fontWeight:700,fontVariantNumeric:'tabular-nums',color:'var(--fc-fg-1)'}}>
+                          {fmt(val)}
+                        </span>
                       </div>
-                    </>
-                  )}
+                      <div style={{height:6,background:'var(--fc-surface-2)',borderRadius:3,overflow:'hidden'}}>
+                        <div style={{height:'100%',borderRadius:3,
+                            width:`${expenses>0?(val/expenses)*100:0}%`,
+                            background:tone==='pink'?'var(--fc-pink)':tone==='amber'?'var(--fc-amber)':tone==='green'?'var(--fc-green)':'var(--fc-violet)',
+                            transition:'width .4s var(--fc-ease)'}}/>
+                      </div>
+                      <div style={{fontSize:11,color:'var(--fc-fg-3)',marginTop:3,textAlign:'right'}}>
+                        {expenses>0?Math.round((val/expenses)*100):0}%
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
             </div>
 
-            {/* Row 2: Monthly evolution */}
-            <div className="card">
-              <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Evolución Mensual</p>
-              <p style={{fontSize:11,color:"#64748B",marginBottom:18}}>
-                Ingresos y gastos de los últimos 6 meses · el número arriba es lo que quedó ese mes
-              </p>
+            {/* Distribución por fuente — donut mejorado */}
+            <DonutWithTooltip slices={sourceSlices} total={sourceTotal}/>
+
+            {/* Evolución mensual */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',
+                borderRadius:24,padding:24,gridColumn:'1/-1'}}>
+              <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Ingresos vs Gastos</h2>
+              <p style={{fontSize:12,color:'var(--fc-fg-3)',marginBottom:20}}>Últimos 6 meses</p>
               {monthlyData.every(m=>m.Ingresos===0&&m.Gastos===0) ? (
-                <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>
-                  Agregá movimientos para ver la evolución mensual
+                <div style={{textAlign:'center',color:'var(--fc-fg-3)',padding:32,fontSize:13}}>
+                  Agregá movimientos para ver la evolución mensual.
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={monthlyData}
-                    margin={{top:28, right:10, left:10, bottom:4}}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" vertical={false}/>
-                    <XAxis dataKey="label" tick={{fill:"#64748B",fontSize:11}}
-                      axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fill:"#64748B",fontSize:10}} axisLine={false} tickLine={false}
-                      tickFormatter={v=>fARSShort(v)} width={52}/>
-                    <Tooltip content={<CustomTooltip/>} cursor={{fill:"rgba(99,102,241,.06)"}}/>
-                    <Legend wrapperStyle={{fontSize:12,color:"#94A3B8",paddingTop:8}}/>
-                    <Bar dataKey="Ingresos" fill="#34D399" radius={[5,5,0,0]} maxBarSize={32}>
-                      {/* Net label above each month group */}
-                      <LabelList dataKey="net" position="top"
-                        content={({x,y,width,value}) => {
-                          if (!value && value!==0) return null;
-                          const color = value>=0?"#34D399":"#F472B6";
-                          const txt   = `${value>=0?"+":""}${fARSShort(value)}`;
-                          return (
-                            <text x={Number(x)+Number(width)/2+20} y={Number(y)-8}
-                              textAnchor="middle" fill={color} fontSize={9} fontWeight="700">
-                              {txt}
-                            </text>
-                          );
-                        }}
-                      />
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={monthlyData} margin={{top:28,right:10,left:10,bottom:4}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--fc-divider)" vertical={false}/>
+                    <XAxis dataKey="label" tick={{fill:'var(--fc-fg-3)',fontSize:12}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fill:'var(--fc-fg-3)',fontSize:11}} axisLine={false} tickLine={false}
+                      tickFormatter={v=>v>=1000?`$${(v/1000).toFixed(0)}k`:''} width={52}/>
+                    <Tooltip contentStyle={{background:'var(--fc-surface)',border:'1px solid var(--fc-border-strong)',
+                        borderRadius:12,fontSize:13}} formatter={v=>fmt(v)}/>
+                    <Legend wrapperStyle={{fontSize:13,color:'var(--fc-fg-2)',paddingTop:10}}/>
+                    <Bar dataKey="Ingresos" fill="var(--fc-green)" radius={[5,5,0,0]} maxBarSize={32}>
+                      <LabelList dataKey="net" position="top" content={({x,y,width,value})=>{
+                        if(!value&&value!==0) return null;
+                        return (
+                          <text x={Number(x)+Number(width)/2+18} y={Number(y)-8}
+                            textAnchor="middle" fill={value>=0?'var(--fc-green)':'var(--fc-pink)'}
+                            fontSize={10} fontWeight="700">
+                            {value>=0?'+':'-'}${Math.abs(value>=1000?Math.round(value/1000):value)}{value>=1000?'k':''}
+                          </text>
+                        );
+                      }}/>
                     </Bar>
-                    <Bar dataKey="Gastos" fill="#F472B6" radius={[5,5,0,0]} maxBarSize={32}/>
+                    <Bar dataKey="Gastos" fill="var(--fc-pink)" radius={[5,5,0,0]} maxBarSize={32}/>
                   </BarChart>
                 </ResponsiveContainer>
               )}
@@ -1176,50 +1193,49 @@ function AppContent({ session, onLogout }) {
           </div>
         )}
 
-        {/* ═══ RECORDS ═══ */}
-        {tab==="records" && (
-          <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {/* Search + filters */}
-            <div className="card" style={{padding:12}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",
-                  borderRadius:10,padding:"9px 12px",marginBottom:8}}>
-                <Search size={14} color="#475569"/>
-                <input value={query} onChange={e=>setQuery(e.target.value)}
-                  placeholder="Buscar por descripción o categoría…"
-                  style={{background:"none",border:"none",outline:"none",flex:1,fontSize:13,
-                    color:"#F1F5F9",fontFamily:"inherit"}}/>
-                {query&&<button onClick={()=>setQuery("")}
-                  style={{background:"none",border:"none",cursor:"pointer",color:"#475569",padding:0}}>
-                  <X size={13}/>
-                </button>}
+        {/* ── RECORDS ── */}
+        {tab==='records' && (
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            {/* Filters */}
+            <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:20,padding:16}}>
+              <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+                <div style={{position:'relative',flex:1}}>
+                  <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',
+                      color:'var(--fc-fg-3)',display:'flex'}}>
+                    <Icon name="search" size={17}/>
+                  </span>
+                  <input value={query} onChange={e=>setQuery(e.target.value)}
+                    placeholder="Buscar movimiento…"
+                    style={{width:'100%',background:'var(--fc-surface-2)',border:'1px solid var(--fc-border-strong)',
+                      color:'var(--fc-fg-1)',borderRadius:12,height:44,paddingLeft:42,paddingRight:14,
+                      fontFamily:'var(--fc-font-sans)',fontSize:13,outline:'none'}}/>
+                </div>
+                <div style={{display:'flex',gap:4,background:'var(--fc-surface-2)',
+                    border:'1px solid var(--fc-border)',borderRadius:12,padding:4,flexShrink:0}}>
+                  {[['all','Todos'],['income','Ingresos'],['expense','Gastos'],['recurring','Fijos']].map(([v,l])=>(
+                    <div key={v} onClick={()=>setFilterType(v)}
+                      style={{padding:'8px 12px',borderRadius:9,fontSize:12,fontWeight:600,cursor:'pointer',
+                        color:filterType===v?'var(--fc-fg-1)':'var(--fc-fg-3)',
+                        background:filterType===v?'var(--fc-surface-3)':'transparent',
+                        transition:'all var(--fc-dur-fast) var(--fc-ease)'}}>
+                      {l}
+                    </div>
+                  ))}
+                </div>
               </div>
-              {/* Type filters */}
-              <div style={{display:"flex",gap:5,marginBottom:8}}>
-                {[["all","Todos","#818CF8"],["income","Ingresos","#34D399"],
-                  ["expense","Gastos","#F472B6"],["recurring","📅 Fijos","#FBBF24"]].map(([val,label,color])=>(
-                  <button key={val} onClick={()=>setFilterType(val)}
-                    style={{flex:1,padding:"7px 4px",borderRadius:9,fontSize:12,fontWeight:600,
-                      border:"none",cursor:"pointer",fontFamily:"inherit",transition:"all .2s",
-                      background:filterType===val?color+"22":"none",
-                      color:filterType===val?color:"#475569"}}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {/* Category chips */}
               {availableCats.length>2 && (
-                <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4}}>
+                <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
                   {availableCats.map(cat=>{
-                    const m = cat!=="all"?(CAT_META[cat]||CAT_META["Otros"]):null;
-                    const color = m?m.color:"#818CF8";
+                    const c=cat!=='all'?CATEGORIES.find(x=>x.id===cat):null;
+                    const color=c?{pink:'var(--fc-pink)',green:'var(--fc-green)',amber:'var(--fc-amber)',violet:'var(--fc-violet-hi)',info:'var(--fc-info)',muted:'var(--fc-fg-2)'}[c.tone]:'var(--fc-violet-hi)';
                     return (
                       <button key={cat} onClick={()=>setFilterCat(cat)}
-                        style={{flexShrink:0,padding:"5px 10px",borderRadius:20,fontSize:11,fontWeight:600,
-                          border:`1px solid ${filterCat===cat?color+"60":color+"20"}`,cursor:"pointer",
-                          fontFamily:"inherit",transition:"all .2s",whiteSpace:"nowrap",
-                          background:filterCat===cat?color+"20":"none",
-                          color:filterCat===cat?color:"#64748B"}}>
-                        {cat==="all"?"Todas":cat}
+                        style={{flexShrink:0,padding:'6px 12px',borderRadius:999,fontSize:11,fontWeight:600,
+                          border:`1px solid ${filterCat===cat?color:'var(--fc-border-strong)'}`,cursor:'pointer',
+                          fontFamily:'var(--fc-font-sans)',transition:'all .18s',whiteSpace:'nowrap',
+                          background:filterCat===cat?color+'22':'none',
+                          color:filterCat===cat?color:'var(--fc-fg-3)'}}>
+                        {cat==='all'?'Todas':CATEGORIES.find(x=>x.id===cat)?.label||cat}
                       </button>
                     );
                   })}
@@ -1227,83 +1243,100 @@ function AppContent({ session, onLogout }) {
               )}
             </div>
 
-            <p style={{fontSize:12,color:"#64748B",paddingLeft:2}}>
-              <span style={{fontWeight:600,color:"#94A3B8"}}>{filtered.length}</span> movimientos
-              {filterCat!=="all" && <> · categoría "<span style={{color:"#818CF8"}}>{filterCat}</span>"</>}
-            </p>
+            {/* Summary stats */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14}}>
+              {[
+                {label:'Total ingresos',val:income,    tone:'green',  icon:'trendUp'},
+                {label:'Total gastos',  val:expenses,  tone:'pink',   icon:'trendDown'},
+                {label:'Balance',       val:balance,   tone:'violet', icon:'wallet'},
+              ].map(({label,val,tone,icon})=>{
+                const palettes={green:{color:'var(--fc-green)',bg:'var(--fc-green-tint)',bd:'var(--fc-green-ring)'},
+                  pink:{color:'var(--fc-pink)',bg:'var(--fc-pink-tint)',bd:'var(--fc-pink-ring)'},
+                  violet:{color:'var(--fc-violet-hi)',bg:'var(--fc-violet-tint)',bd:'var(--fc-violet-ring)'}};
+                const p=palettes[tone];
+                return (
+                  <div key={label} style={{background:'var(--fc-surface)',border:`1px solid ${p.bd}`,
+                      borderRadius:18,padding:18}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                      <IconTile name={icon} color={tone}/>
+                      <span style={{fontSize:12,color:'var(--fc-fg-3)',fontWeight:600}}>{label}</span>
+                    </div>
+                    <div style={{fontSize:24,fontWeight:700,color:p.color,fontVariantNumeric:'tabular-nums'}}>
+                      {fmt(val,tone==='pink'?'−':'+')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
-            {/* Grouped by date with swipe-to-delete */}
+            {/* Grouped transactions */}
             {filtered.length===0 ? (
-              <div className="card" style={{textAlign:"center",padding:"48px 0",color:"#475569"}}>
-                <List size={32} style={{margin:"0 auto 10px",opacity:.2}}/>
-                <p style={{fontSize:13}}>{txs.length===0?"Todavía no hay movimientos":"Sin resultados"}</p>
+              <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',
+                  borderRadius:20,padding:48,textAlign:'center',color:'var(--fc-fg-3)'}}>
+                <Icon name="list" size={32} style={{margin:'0 auto 12px',display:'block',opacity:.3}}/>
+                <p style={{fontSize:13}}>{txs.length===0?'Todavía no hay movimientos':'Sin resultados'}</p>
               </div>
             ) : (() => {
-              const groups = {};
-              filtered.forEach(tx=>{ if(!groups[tx.date]) groups[tx.date]=[]; groups[tx.date].push(tx); });
-              const sortedDates = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
-              return sortedDates.map(date=>{
-                const dayTxs = groups[date];
-                const dayNet = dayTxs.reduce((s,t)=>t.type==="income"?s+t.amount:s-t.amount, 0);
+              const groups={};
+              filtered.forEach(tx=>{if(!groups[tx.date])groups[tx.date]=[];groups[tx.date].push(tx);});
+              return Object.keys(groups).sort((a,b)=>b.localeCompare(a)).map(date=>{
+                const dayTxs=groups[date];
+                const dayNet=dayTxs.reduce((s,t)=>t.type==='income'?s+t.amount:s-t.amount,0);
                 return (
                   <div key={date}>
-                    {/* Date separator with NET balance */}
-                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,marginTop:4}}>
-                      <div style={{height:1,flex:1,background:"linear-gradient(to right,#1E293B,transparent)"}}/>
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                        <span style={{fontSize:11,fontWeight:700,color:"#64748B"}}>{fDateLong(date)}</span>
-                        <span style={{fontSize:11,fontWeight:800,
-                            color:dayNet>=0?"#34D399":"#F472B6",
-                            background:dayNet>=0?"rgba(52,211,153,.1)":"rgba(244,114,182,.1)",
-                            borderRadius:8,padding:"2px 8px",
-                            border:`1px solid ${dayNet>=0?"rgba(52,211,153,.25)":"rgba(244,114,182,.25)"}`}}>
-                          {dayNet>=0?"+":""}{fARS(dayNet)}
-                        </span>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+                        padding:'12px 20px 8px',background:'var(--fc-bg-2)',borderRadius:'12px 12px 0 0',
+                        border:'1px solid var(--fc-border)',borderBottom:'none'}}>
+                      <div style={{fontSize:11,fontWeight:700,letterSpacing:'0.1em',
+                          textTransform:'uppercase',color:'var(--fc-fg-3)'}}>
+                        {fmtDateLong(date)}
                       </div>
-                      <div style={{height:1,flex:1,background:"linear-gradient(to left,#1E293B,transparent)"}}/>
+                      <div style={{fontSize:13,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                          display:'inline-flex',alignItems:'center',gap:6,
+                          color:dayNet===0?'var(--fc-fg-2)':dayNet>0?'var(--fc-green)':'var(--fc-pink)'}}>
+                        <Icon name={dayNet>0?'trendUp':dayNet<0?'trendDown':'wallet'} size={14} stroke={2}/>
+                        {fmt(dayNet,dayNet>=0?'+':'−')}
+                      </div>
                     </div>
-
-                    <div className="card" style={{padding:0,overflow:"hidden"}}>
+                    <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',
+                        borderTop:'none',borderRadius:'0 0 16px 16px',overflow:'hidden'}}>
                       {dayTxs.map(tx=>{
-                        const src = sourceLabel(tx);
+                        const cat=CATEGORIES.find(c=>c.id===tx.category);
+                        const bank=ARG_BANKS.find(b=>b.id===tx.wallet)||null;
+                        const isIncome=tx.type==='income';
                         return (
-                          <div key={tx.id} className="tx-wrap" style={{borderBottom:"1px solid #1E293B"}}>
-                            <SwipeableRow id={tx.id} onDeleteRequest={confirmDelete}>
-                              <div className="tx-row">
-                                <TxIcon cat={tx.category}/>
+                          <div key={tx.id} style={{borderBottom:'1px solid var(--fc-divider)'}}>
+                            <SwipeableRow id={tx.id} onDeleteRequest={setDeleteId}>
+                              <div style={{display:'flex',alignItems:'center',gap:14,padding:'14px 20px',
+                                  transition:'background var(--fc-dur-fast) var(--fc-ease)'}}
+                                onMouseEnter={e=>e.currentTarget.style.background='var(--fc-surface-2)'}
+                                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                                <IconTile name={cat?.icon||'wallet'} color={cat?.tone||'muted'} size={38}/>
                                 <div style={{flex:1,minWidth:0}}>
-                                  <p style={{fontSize:13,fontWeight:600,overflow:"hidden",
-                                      textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                    {tx.description}
-                                  </p>
-                                  <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
-                                    <span style={{fontSize:11,color:"#64748B"}}>{tx.category}</span>
-                                    <span style={{fontSize:11,color:"#334155"}}>·</span>
-                                    <span style={{fontSize:10,fontWeight:600,color:src.color,
-                                        background:src.color+"15",borderRadius:6,padding:"1px 6px",
-                                        border:`1px solid ${src.color}28`}}>
-                                      {src.icon} {src.text}
+                                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                                    <span style={{fontSize:14,fontWeight:600,color:'var(--fc-fg-1)',
+                                        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                                      {tx.description||tx.concept}
                                     </span>
-                                    {tx.recurring && (
-                                      <span style={{fontSize:10,fontWeight:600,color:"#FBBF24",
-                                          background:"rgba(251,191,36,.1)",borderRadius:6,padding:"1px 6px",
-                                          border:"1px solid rgba(251,191,36,.2)"}}>
-                                        📅 fijo{tx.dueDay?` · día ${tx.dueDay}`:""}
-                                      </span>
-                                    )}
+                                    {tx.recurring && <Badge tone="amber">FIJO</Badge>}
+                                  </div>
+                                  <div style={{fontSize:12,color:'var(--fc-fg-3)',marginTop:4,
+                                      display:'flex',gap:8,alignItems:'center'}}>
+                                    <span>{cat?.label||tx.category}</span>
+                                    <span style={{opacity:.4}}>·</span>
+                                    {tx.wallet==='manual'||tx.wallet==='efectivo'
+                                      ? <span>Efectivo</span>
+                                      : bank ? <span style={{display:'inline-flex',alignItems:'center',gap:6}}>
+                                          <BankBadge bankId={bank.id} size={16}/>
+                                          {bank.name}
+                                        </span>
+                                      : <span>{tx.wallet}</span>
+                                    }
                                   </div>
                                 </div>
-                                <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                                  <span style={{fontSize:13,fontWeight:700,
-                                      color:tx.type==="income"?"#34D399":"#F472B6"}}>
-                                    {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
-                                  </span>
-                                  {/* Desktop delete button (hover) */}
-                                  <button className="tx-del-btn" onClick={()=>confirmDelete(tx.id)}
-                                    style={{background:"none",border:"none",cursor:"pointer",
-                                        color:"#334155",padding:"4px",borderRadius:6,display:"flex"}}>
-                                    <Trash2 size={13}/>
-                                  </button>
+                                <div style={{fontSize:15,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                                    color:isIncome?'var(--fc-green)':'var(--fc-pink)',flexShrink:0}}>
+                                  {fmt(tx.amount,isIncome?'+':'−')}
                                 </div>
                               </div>
                             </SwipeableRow>
@@ -1317,123 +1350,64 @@ function AppContent({ session, onLogout }) {
             })()}
           </div>
         )}
-
-        {/* ═══ GUIDE ═══ */}
-        {tab==="guide" && (
-          <div style={{display:"flex",flexDirection:"column",gap:14,maxWidth:720}}>
-            <div className="card" style={{borderColor:"rgba(99,102,241,.25)",background:"rgba(99,102,241,.06)"}}>
-              <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                <div style={{width:32,height:32,borderRadius:9,background:"rgba(99,102,241,.2)",
-                    display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:2}}>
-                  <Info size={15} color="#818CF8"/>
-                </div>
-                <div>
-                  <p style={{fontSize:13,fontWeight:700,color:"#A5B4FC",marginBottom:5}}>Integración Real con APIs</p>
-                  <p style={{fontSize:12,color:"#94A3B8",lineHeight:1.7}}>
-                    Guía para conectar FlowCash con tus billeteras reales en producción.
-                  </p>
-                </div>
-              </div>
-            </div>
-            {[{title:"Mercado Pago API",sub:"developers.mercadopago.com",color:"#00BCFF",
-               steps:[
-                 {n:"1",t:"Crear cuenta de desarrollador",d:'Ingresá a developers.mercadopago.com. Iniciá sesión y creá una cuenta de tipo "Desarrollador".'},
-                 {n:"2",t:"Crear una Aplicación",d:"En el panel Developer, creá una nueva app. Habilitá: Pagos, Cobros y Transferencias."},
-                 {n:"3",t:"Obtener el Access Token",d:'En "Credenciales de producción" copiá tu Access Token (APP_USR-...). Guardalo en .env.'},
-                 {n:"4",t:"Endpoint de movimientos",d:"GET /v1/payments/search con header Authorization: Bearer {TOKEN}."},
-                 {n:"5",t:"Webhook tiempo real",d:"Notificaciones → Webhook URL apuntando a tu backend para recibir cada pago."},
-               ]},
-              {title:"Lemon Cash SDK",sub:"Mini-Apps · lemon.me",color:"#FFD700",
-               steps:[
-                 {n:"1",t:"Mini-App SDK",d:"Lemon lanzó su SDK en nov 2025. Permite autenticación dentro de la app de Lemon."},
-                 {n:"2",t:"Limitación actual",d:"El SDK no expone historial de movimientos hacia afuera. La opción práctica hoy es exportar el CSV desde la app."},
-               ]},
-            ].map(({title,sub,color,steps})=>(
-              <div key={title} className="card">
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
-                  <div style={{width:34,height:34,borderRadius:10,background:color+"18",
-                      border:`1px solid ${color}30`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    <Key size={15} color={color}/>
-                  </div>
-                  <div>
-                    <p style={{fontSize:13,fontWeight:700}}>{title}</p>
-                    <p style={{fontSize:11,color:"#64748B"}}>{sub}</p>
-                  </div>
-                </div>
-                {steps.map(({n,t,d})=>(
-                  <div key={n} style={{display:"flex",gap:12,marginBottom:13}}>
-                    <div style={{width:22,height:22,borderRadius:"50%",background:color+"18",
-                        color,fontSize:11,fontWeight:700,display:"flex",alignItems:"center",
-                        justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
-                    <div>
-                      <p style={{fontSize:13,fontWeight:600,color:"#E2E8F0",marginBottom:3}}>{t}</p>
-                      <p style={{fontSize:12,color:"#94A3B8",lineHeight:1.65}}>{d}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-            <div className="card" style={{borderColor:"rgba(251,191,36,.2)",background:"rgba(251,191,36,.04)"}}>
-              <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                <Shield size={15} color="#FBBF24" style={{marginTop:2,flexShrink:0}}/>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:"#FCD34D",marginBottom:5}}>Seguridad</p>
-                  <p style={{fontSize:11,color:"#94A3B8",lineHeight:1.7}}>
-                    Jamás expongas tokens en el frontend. Variables de entorno y backend propio siempre.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
+      </div>
 
       {/* FAB */}
-      <button onClick={()=>setShowModal(true)} className="grad-fab"
-        style={{position:"fixed",bottom:24,right:20,width:56,height:56,borderRadius:16,
-          border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
-          zIndex:40,transition:"transform .15s"}}
-        onMouseEnter={e=>e.currentTarget.style.transform="scale(1.09)"}
-        onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
-        <Plus size={24} color="#fff" strokeWidth={2.5}/>
+      <button onClick={()=>setShowAddTx(true)}
+        style={{position:'fixed',bottom:28,right:28,width:64,height:64,borderRadius:24,
+          background:'var(--fc-grad-fab)',boxShadow:'var(--fc-shadow-fab)',border:0,cursor:'pointer',
+          color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,
+          transition:'transform var(--fc-dur-fast) var(--fc-ease)'}}
+        onMouseEnter={e=>e.currentTarget.style.transform='scale(1.07)'}
+        onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
+        <Icon name="plus" size={28} stroke={2.4} style={{color:'#fff'}}/>
       </button>
 
       {/* TOAST */}
       {toast && (
-        <div className="toast" style={{
-          background:toast.ok?"rgba(52,211,153,.13)":"rgba(244,114,182,.13)",
-          border:`1px solid ${toast.ok?"rgba(52,211,153,.3)":"rgba(244,114,182,.3)"}`,
-          color:toast.ok?"#34D399":"#F472B6"}}>
+        <div style={{position:'fixed',bottom:108,left:'50%',transform:'translateX(-50%)',zIndex:400,
+            padding:'10px 18px',borderRadius:12,fontSize:13,fontWeight:600,whiteSpace:'nowrap',
+            pointerEvents:'none',animation:'fcSlideUp .3s var(--fc-ease)',
+            background:toast.ok?'var(--fc-green-tint)':'var(--fc-pink-tint)',
+            border:`1px solid ${toast.ok?'var(--fc-green-ring)':'var(--fc-pink-ring)'}`,
+            color:toast.ok?'var(--fc-green)':'var(--fc-pink)'}}>
           {toast.msg}
         </div>
       )}
 
+      {/* ADD TX MODAL */}
+      {showAddTx && <AddTxModal activeWalletKeys={activeWalletKeys} walletBalance={walletBalance}
+        onSave={addTx} onClose={()=>setShowAddTx(false)}/>}
+
       {/* DELETE CONFIRM */}
-      {deleteConfirmId && (
-        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setDeleteConfirmId(null);}}>
-          <div className="glass-hi fade-in" style={{width:"100%",maxWidth:340,borderRadius:20,padding:24}}>
-            <div style={{textAlign:"center",marginBottom:20}}>
-              <div style={{width:44,height:44,borderRadius:12,background:"rgba(244,114,182,.1)",
-                  border:"1px solid rgba(244,114,182,.2)",display:"flex",alignItems:"center",
-                  justifyContent:"center",margin:"0 auto 12px"}}>
-                <Trash2 size={20} color="#F472B6"/>
+      {deleteId && (
+        <div style={{position:'fixed',inset:0,zIndex:300,display:'flex',alignItems:'center',
+            justifyContent:'center',padding:'16px 20px',background:'var(--fc-overlay)',
+            backdropFilter:'blur(6px)',animation:'fcFade 200ms var(--fc-ease)'}}
+          onClick={e=>{if(e.target===e.currentTarget)setDeleteId(null);}}>
+          <div style={{width:'100%',maxWidth:340,background:'var(--fc-bg-2)',
+              border:'1px solid var(--fc-border-strong)',borderRadius:22,padding:24,
+              animation:'fcPop 220ms var(--fc-ease)'}}>
+            <div style={{textAlign:'center',marginBottom:20}}>
+              <div style={{width:48,height:48,borderRadius:14,background:'var(--fc-pink-tint)',
+                  border:'1px solid var(--fc-pink-ring)',display:'flex',alignItems:'center',
+                  justifyContent:'center',margin:'0 auto 14px'}}>
+                <Icon name="trash" size={22} style={{color:'var(--fc-pink)'}}/>
               </div>
-              <h3 style={{fontSize:16,fontWeight:700,marginBottom:6}}>¿Eliminar movimiento?</h3>
-              <p style={{fontSize:13,color:"#64748B",lineHeight:1.5}}>
-                Esta acción no se puede deshacer.
-              </p>
+              <h3 style={{fontSize:16,fontWeight:700,marginBottom:8,color:'var(--fc-fg-1)'}}>¿Eliminar movimiento?</h3>
+              <p style={{fontSize:13,color:'var(--fc-fg-3)'}}>Esta acción no se puede deshacer.</p>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <button onClick={()=>setDeleteConfirmId(null)}
-                style={{padding:"12px",borderRadius:12,fontSize:13,fontWeight:600,
-                  background:"#1E293B",border:"1px solid #334155",color:"#94A3B8",
-                  cursor:"pointer",fontFamily:"inherit"}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              <button onClick={()=>setDeleteId(null)}
+                style={{padding:'12px',borderRadius:12,fontSize:13,fontWeight:600,
+                  background:'var(--fc-surface-2)',border:'1px solid var(--fc-border-strong)',
+                  color:'var(--fc-fg-2)',cursor:'pointer',fontFamily:'var(--fc-font-sans)'}}>
                 Cancelar
               </button>
               <button onClick={doDelete}
-                style={{padding:"12px",borderRadius:12,fontSize:13,fontWeight:600,
-                  background:"rgba(244,114,182,.15)",border:"1px solid rgba(244,114,182,.3)",
-                  color:"#F472B6",cursor:"pointer",fontFamily:"inherit"}}>
+                style={{padding:'12px',borderRadius:12,fontSize:13,fontWeight:600,
+                  background:'var(--fc-pink-tint)',border:'1px solid var(--fc-pink-ring)',
+                  color:'var(--fc-pink)',cursor:'pointer',fontFamily:'var(--fc-font-sans)'}}>
                 Eliminar
               </button>
             </div>
@@ -1443,33 +1417,34 @@ function AppContent({ session, onLogout }) {
 
       {/* LOGOUT CONFIRM */}
       {showLogout && (
-        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setShowLogout(false);}}>
-          <div className="glass-hi fade-in" style={{width:"100%",maxWidth:360,borderRadius:20,padding:24}}>
-            <div style={{textAlign:"center",marginBottom:20}}>
-              <div style={{width:44,height:44,borderRadius:12,background:"rgba(244,114,182,.1)",
-                  border:"1px solid rgba(244,114,182,.2)",display:"flex",alignItems:"center",
-                  justifyContent:"center",margin:"0 auto 12px"}}>
-                <LogOut size={20} color="#F472B6"/>
+        <div style={{position:'fixed',inset:0,zIndex:300,display:'flex',alignItems:'center',
+            justifyContent:'center',padding:'16px 20px',background:'var(--fc-overlay)',
+            backdropFilter:'blur(6px)',animation:'fcFade 200ms var(--fc-ease)'}}
+          onClick={e=>{if(e.target===e.currentTarget)setShowLogout(false);}}>
+          <div style={{width:'100%',maxWidth:360,background:'var(--fc-bg-2)',
+              border:'1px solid var(--fc-border-strong)',borderRadius:22,padding:24,
+              animation:'fcPop 220ms var(--fc-ease)'}}>
+            <div style={{textAlign:'center',marginBottom:20}}>
+              <div style={{width:48,height:48,borderRadius:14,background:'var(--fc-pink-tint)',
+                  border:'1px solid var(--fc-pink-ring)',display:'flex',alignItems:'center',
+                  justifyContent:'center',margin:'0 auto 14px'}}>
+                <Icon name="logout" size={22} style={{color:'var(--fc-pink)'}}/>
               </div>
-              <h3 style={{fontSize:16,fontWeight:700,marginBottom:6}}>Cerrar sesión</h3>
-              <p style={{fontSize:13,color:"#64748B",lineHeight:1.5}}>
-                Tus datos quedan guardados en este dispositivo.
-              </p>
-              <p style={{fontSize:11,color:"#475569",marginTop:6}}>
-                Sesión: <span style={{color:"#818CF8"}}>{email}</span>
-              </p>
+              <h3 style={{fontSize:16,fontWeight:700,marginBottom:6,color:'var(--fc-fg-1)'}}>Cerrar sesión</h3>
+              <p style={{fontSize:13,color:'var(--fc-fg-3)'}}>Tus datos quedan guardados en la nube.</p>
+              <p style={{fontSize:12,color:'var(--fc-fg-4)',marginTop:6}}>{email}</p>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
               <button onClick={()=>setShowLogout(false)}
-                style={{padding:"12px",borderRadius:12,fontSize:13,fontWeight:600,
-                  background:"#1E293B",border:"1px solid #334155",color:"#94A3B8",
-                  cursor:"pointer",fontFamily:"inherit"}}>
+                style={{padding:'12px',borderRadius:12,fontSize:13,fontWeight:600,
+                  background:'var(--fc-surface-2)',border:'1px solid var(--fc-border-strong)',
+                  color:'var(--fc-fg-2)',cursor:'pointer',fontFamily:'var(--fc-font-sans)'}}>
                 Cancelar
               </button>
-              <button onClick={()=>{ setShowLogout(false); onLogout(); }}
-                style={{padding:"12px",borderRadius:12,fontSize:13,fontWeight:600,
-                  background:"rgba(244,114,182,.15)",border:"1px solid rgba(244,114,182,.3)",
-                  color:"#F472B6",cursor:"pointer",fontFamily:"inherit"}}>
+              <button onClick={()=>{setShowLogout(false);onLogout();}}
+                style={{padding:'12px',borderRadius:12,fontSize:13,fontWeight:600,
+                  background:'var(--fc-pink-tint)',border:'1px solid var(--fc-pink-ring)',
+                  color:'var(--fc-pink)',cursor:'pointer',fontFamily:'var(--fc-font-sans)'}}>
                 Cerrar sesión
               </button>
             </div>
@@ -1477,248 +1452,413 @@ function AppContent({ session, onLogout }) {
         </div>
       )}
 
-      {/* ADD TX MODAL */}
-      {showModal && (
-        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setShowModal(false);}}>
-          <div className="glass-hi fade-in"
-            style={{width:"100%",maxWidth:540,borderRadius:22,padding:24,maxHeight:"90vh",overflowY:"auto"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
-              <h2 style={{fontSize:18,fontWeight:800,letterSpacing:"-.3px"}}>Nuevo Movimiento</h2>
-              <button onClick={()=>setShowModal(false)}
-                style={{width:32,height:32,borderRadius:9,background:"#1E293B",border:"none",cursor:"pointer",
-                    display:"flex",alignItems:"center",justifyContent:"center"}}>
-                <X size={15} color="#94A3B8"/>
-              </button>
-            </div>
+      {/* WALLET MANAGER */}
+      {showWalletMgr && <WalletManager activeKeys={activeWalletKeys}
+        onSave={saveWallets} onClose={()=>setShowWalletMgr(false)}/>}
+    </div>
+  );
+}
 
-            {/* Expense / Income toggle */}
-            <div className="pill" style={{marginBottom:18}}>
-              {[["expense","Gasto","#DC2626","#BE123C"],["income","Ingreso","#059669","#047857"]].map(
-                ([val,label,c1,c2])=>(
-                  <button key={val} className="pill-o"
-                    onClick={()=>setForm(f=>({...f,type:val,category:val==="expense"?"Alimentación":"Sueldo",recurring:false,dueDay:""}))}
-                    style={form.type===val?{background:`linear-gradient(135deg,${c1},${c2})`,color:"#fff"}:{}}>
-                    {label}
-                  </button>
-                )
+/* ═══════════════════════════════════════════════════════════
+   DONUT WITH TOOLTIP — posicionado fuera de la dona
+═══════════════════════════════════════════════════════════ */
+function DonutWithTooltip({ slices, total }) {
+  const [tip, setTip] = useState(null);
+  const hasData = total>0 && slices.some(s=>s.val>0);
+  return (
+    <div style={{background:'var(--fc-surface)',border:'1px solid var(--fc-border)',borderRadius:24,padding:24}}>
+      <h2 style={{fontSize:17,fontWeight:700,color:'var(--fc-fg-1)',margin:'0 0 4px'}}>Distribución por fuente</h2>
+      <p style={{fontSize:12,color:'var(--fc-fg-3)',marginBottom:20}}>Saldo por billetera</p>
+      {!hasData ? (
+        <div style={{textAlign:'center',color:'var(--fc-fg-3)',padding:40,fontSize:13,minHeight:200,
+            display:'flex',alignItems:'center',justifyContent:'center'}}>
+          Cargá ingresos para ver la distribución.
+        </div>
+      ) : (
+        <>
+          <div style={{position:'relative',marginBottom:4}}>
+            {/* Tooltip arriba de la dona */}
+            <div style={{position:'absolute',top:-10,left:'50%',transform:'translateX(-50%)',
+                zIndex:20,pointerEvents:'none',
+                opacity:tip?1:0,transition:'opacity .15s ease'}}>
+              {tip && (
+                <div style={{background:'var(--fc-surface)',border:`1px solid ${tip.color}55`,
+                    borderRadius:12,padding:'10px 14px',whiteSpace:'nowrap',
+                    boxShadow:'var(--fc-shadow-2)',display:'flex',flexDirection:'column',
+                    alignItems:'center',gap:3}}>
+                  <div style={{display:'flex',alignItems:'center',gap:7}}>
+                    <span style={{width:9,height:9,borderRadius:'50%',background:tip.color,flexShrink:0}}/>
+                    <span style={{fontSize:12,fontWeight:700,color:'var(--fc-fg-1)'}}>{tip.label}</span>
+                  </div>
+                  <span style={{fontSize:14,fontWeight:700,color:tip.color,fontVariantNumeric:'tabular-nums'}}>
+                    {fmt(tip.val)}
+                  </span>
+                  <span style={{fontSize:11,color:'var(--fc-fg-3)'}}>
+                    {total>0?Math.round((tip.val/total)*100):0}% del total
+                  </span>
+                </div>
               )}
             </div>
-
-            {/* Amount */}
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>MONTO (ARS)</label>
-              <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",borderRadius:12,
-                  padding:"10px 12px 10px 16px",border:`1px solid ${form.amount?"#6366F1":"#334155"}`,
-                  transition:"border-color .2s"}}>
-                <span style={{fontSize:20,color:"#475569",fontWeight:600}}>$</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={form.amount}
-                  onChange={e=>{
-                    const v = e.target.value.replace(/[^0-9.]/g,'');
-                    setForm(f=>({...f,amount:v}));
-                  }}
-                  placeholder="0"
-                  style={{background:"none",border:"none",outline:"none",flex:1,
-                      fontSize:28,fontWeight:800,color:"#F1F5F9",fontFamily:"inherit",
-                      width:"100%",minWidth:0}}/>
-                {/* Custom chevron buttons */}
-                <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
-                  {[
-                    { dir: 1,  step: 100, path: "M6 9 L10 5 L14 9" },
-                    { dir: -1, step: 100, path: "M6 7 L10 11 L14 7" },
-                  ].map(({dir, step, path}) => (
-                    <button
-                      key={dir}
-                      type="button"
-                      onMouseDown={e => {
-                        e.preventDefault();
-                        setForm(f => {
-                          const cur = parseFloat(f.amount) || 0;
-                          const next = Math.max(0, cur + dir * step);
-                          return {...f, amount: String(next)};
-                        });
-                      }}
-                      style={{
-                        width: 26, height: 26, borderRadius: "50%",
-                        background: "linear-gradient(135deg,#6366F1,#8B5CF6)",
-                        border: "none", cursor: "pointer", padding: 0,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        flexShrink: 0, transition: "opacity .15s, transform .15s",
-                        boxShadow: "0 2px 8px rgba(99,102,241,.4)",
-                      }}
-                      onMouseEnter={e=>{e.currentTarget.style.opacity=".85"; e.currentTarget.style.transform="scale(1.08)";}}
-                      onMouseLeave={e=>{e.currentTarget.style.opacity="1";   e.currentTarget.style.transform="scale(1)";}}
-                      onMouseUp={e=>{e.currentTarget.style.transform="scale(1)";}}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 20 16" fill="none"
-                           stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d={path}/>
-                      </svg>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <p style={{fontSize:10,color:"#475569",marginTop:5,paddingLeft:2}}>
-                Los botones suman/restan $100 · o escribí el monto directo
+            <ResponsiveContainer width="100%" height={190}>
+              <PieChart>
+                <Pie data={slices} cx="50%" cy="50%" innerRadius={60} outerRadius={88}
+                     paddingAngle={4} dataKey="val" strokeWidth={0}
+                     onMouseEnter={d=>setTip(d)}
+                     onMouseLeave={()=>setTip(null)}>
+                  {slices.map((e,i)=><Cell key={i} fill={e.color}/>)}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+            {/* Centro */}
+            <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',
+                textAlign:'center',pointerEvents:'none',zIndex:1}}>
+              <p style={{fontSize:10,color:'var(--fc-fg-3)',fontWeight:600,textTransform:'uppercase',letterSpacing:.5}}>Total</p>
+              <p style={{fontSize:14,fontWeight:700,color:'var(--fc-fg-1)',fontVariantNumeric:'tabular-nums'}}>
+                {fmt(total)}
               </p>
             </div>
-
-            {/* Description */}
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>DESCRIPCIÓN</label>
-              <input className="input-fc" value={form.description}
-                onChange={e=>setForm(f=>({...f,description:e.target.value}))}
-                placeholder="¿En qué gastaste o de dónde viene?"/>
-            </div>
-
-            {/* Category */}
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>CATEGORÍA</label>
-              <select className="input-fc" value={form.category}
-                onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-                {(form.type==="expense"?EXPENSE_CATS:INCOME_CATS).map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-
-            {/* Date + Source */}
-            <div className="date-source-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:form.source==="digital"?10:20}}>
-              <div className="date-input-wrap">
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FECHA</label>
-                <input type="date" className="input-fc" value={form.date}
-                  onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
-              </div>
-              <div>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FUENTE</label>
-                <div className="pill" style={{padding:3}}>
-                  {[["cash","💵 Efec.","#34D399"],["digital","💳 Dig.","#60A5FA"]].map(([val,ico,col])=>(
-                    <button key={val} className="pill-o"
-                      onClick={()=>setForm(f=>({...f,source:val,wallet:val==="cash"?"manual":"mercadopago"}))}
-                      style={{...(form.source===val?{background:col+"22",color:col}:{}),fontSize:12}}>
-                      {ico}
-                    </button>
-                  ))}
+          </div>
+          {/* Leyenda */}
+          <div style={{display:'flex',flexDirection:'column',gap:10,marginTop:12}}>
+            {slices.map(s=>{
+              const pct=total>0?Math.round((s.val/total)*100):0;
+              return (
+                <div key={s.id}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:5}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <BankBadge bankId={s.id} size={20}/>
+                      <span style={{fontSize:12,fontWeight:600,color:'var(--fc-fg-1)'}}>{s.label}</span>
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:12}}>
+                      <span style={{fontSize:11,color:'var(--fc-fg-3)',fontVariantNumeric:'tabular-nums'}}>
+                        {fmt(s.val)}
+                      </span>
+                      <span style={{fontSize:13,fontWeight:700,color:s.color,minWidth:36,textAlign:'right',
+                          fontVariantNumeric:'tabular-nums'}}>{pct}%</span>
+                    </div>
+                  </div>
+                  <div style={{height:5,background:'var(--fc-surface-2)',borderRadius:99,overflow:'hidden'}}>
+                    <div style={{height:'100%',borderRadius:99,width:`${pct}%`,background:s.color,transition:'width .4s var(--fc-ease)'}}/>
+                  </div>
                 </div>
-              </div>
-            </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
-            {/* Digital wallet picker */}
-            {form.source==="digital" && (
-              <div style={{marginBottom:14,animation:"fu .2s ease-out both"}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
-                  {form.type==="expense"?"¿DESDE QUÉ BILLETERA SALIÓ?":"¿EN QUÉ BILLETERA ENTRÓ?"}
-                </label>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[{key:"mercadopago",label:"Mercado Pago",sub:"Billetera digital",color:"#00BCFF",Icon:CreditCard},
-                    {key:"lemoncash",  label:"Lemon Cash",  sub:"Cripto + ARS",    color:"#FFD700",Icon:Smartphone}].map(({key,label,sub,color,Icon:WI})=>{
-                    const wBal = walletBalance(key);
-                    const req  = parseFloat(form.amount)||0;
-                    const insuf = form.type==="expense"&&req>0&&wBal<req;
-                    const sel   = form.wallet===key;
+/* ═══════════════════════════════════════════════════════════
+   ADD TRANSACTION MODAL — diseño nuevo
+═══════════════════════════════════════════════════════════ */
+function AddTxModal({ activeWalletKeys, walletBalance, onSave, onClose }) {
+  const [type, setType]         = useState('expense');
+  const [amount, setAmount]     = useState('');
+  const [concept, setConcept]   = useState('');
+  const [category, setCategory] = useState('comida');
+  const [wallet, setWallet]     = useState('efectivo');
+  const [source, setSource]     = useState('efectivo'); // efectivo o digital
+  const [fixed, setFixed]       = useState(false);
+  const [dueDay, setDueDay]     = useState('');
+  const [dropOpen, setDropOpen] = useState(false);
+  const [date, setDate]         = useState(todayISO());
+
+  const cats = CATEGORIES.filter(c=>c.type===type);
+  const digitalWallets = activeWalletKeys.filter(k=>k!=='efectivo');
+  const valid = parseFloat(amount)>0 && concept.trim().length>0;
+
+  const submit = () => {
+    if(!valid) return;
+    const backendCat = category;
+    onSave({
+      type, amount:parseFloat(amount), description:concept.trim(),
+      category:backendCat, wallet:source==='efectivo'?'efectivo':wallet,
+      source:source==='efectivo'?'cash':'digital',
+      date, recurring:fixed, dueDay:fixed?dueDay:'',
+      wallet_name:source==='efectivo'?'manual':(ARG_BANKS.find(b=>b.id===wallet)?.id||wallet),
+    });
+  };
+
+  // Featured (first 2) + extra for dropdown
+  const featured = digitalWallets.slice(0,2);
+  const extra    = digitalWallets.slice(2);
+  const selInExtra = extra.find(k=>k===wallet);
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,zIndex:200,
+        background:'var(--fc-overlay)',display:'flex',alignItems:'center',justifyContent:'center',
+        padding:20,animation:'fcFade 200ms var(--fc-ease)'}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:'min(540px,100%)',maxHeight:'92vh',
+          background:'var(--fc-bg-2)',border:'1px solid var(--fc-border-strong)',borderRadius:22,
+          padding:22,boxShadow:'var(--fc-shadow-3)',animation:'fcPop 220ms var(--fc-ease)',
+          display:'flex',flexDirection:'column',gap:16,overflowY:'auto'}}>
+
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <h2 style={{fontSize:18,fontWeight:700,letterSpacing:'-0.02em',color:'var(--fc-fg-1)'}}>
+            Nuevo movimiento
+          </h2>
+          <button onClick={onClose} style={{width:36,height:36,borderRadius:10,
+              background:'var(--fc-surface-2)',border:'none',cursor:'pointer',
+              display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fc-fg-2)'}}>
+            <Icon name="x" size={16}/>
+          </button>
+        </div>
+
+        {/* Income / Expense */}
+        <div style={{display:'flex',gap:6,background:'var(--fc-surface-2)',
+            border:'1px solid var(--fc-border)',borderRadius:14,padding:5}}>
+          {[['expense','Gasto'],['income','Ingreso']].map(([v,l])=>(
+            <div key={v} onClick={()=>{setType(v);setCategory(v==='expense'?'comida':'sueldo');}}
+              style={{flex:1,padding:'11px',borderRadius:11,fontSize:14,fontWeight:600,
+                textAlign:'center',cursor:'pointer',transition:'all var(--fc-dur-fast) var(--fc-ease)',
+                color:type===v?'#fff':v==='expense'?'var(--fc-pink)':'var(--fc-green)',
+                background:type===v?v==='expense'?'#8b1a2f':'#1a5c3d':'transparent',
+                boxShadow:type===v?'var(--fc-shadow-2)':'none'}}>
+              {l}
+            </div>
+          ))}
+        </div>
+
+        {/* Amount */}
+        <div>
+          <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+              color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>Monto</label>
+          <div style={{position:'relative'}}>
+            <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',
+                color:'var(--fc-fg-3)',fontSize:18,fontWeight:600}}>$</span>
+            <input value={amount} onChange={e=>setAmount(e.target.value.replace(/[^0-9.]/g,''))}
+              placeholder="0" inputMode="decimal"
+              style={{width:'100%',height:52,background:'var(--fc-surface)',
+                border:'1px solid var(--fc-border-strong)',borderRadius:12,paddingLeft:30,paddingRight:14,
+                color:type==='income'?'var(--fc-green)':'var(--fc-pink)',
+                fontSize:24,fontWeight:700,fontVariantNumeric:'tabular-nums',outline:'none',fontFamily:'var(--fc-font-sans)'}}
+              onFocus={e=>e.target.style.borderColor='var(--fc-violet)'}
+              onBlur={e=>e.target.style.borderColor='var(--fc-border-strong)'}/>
+          </div>
+        </div>
+
+        {/* Concept */}
+        <div>
+          <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+              color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>Concepto</label>
+          <input value={concept} onChange={e=>setConcept(e.target.value)}
+            placeholder="Ej: Supermercado Coto"
+            style={{width:'100%',height:44,background:'var(--fc-surface)',
+              border:'1px solid var(--fc-border-strong)',borderRadius:12,padding:'0 14px',
+              color:'var(--fc-fg-1)',fontSize:14,outline:'none',fontFamily:'var(--fc-font-sans)'}}
+            onFocus={e=>e.target.style.borderColor='var(--fc-violet)'}
+            onBlur={e=>e.target.style.borderColor='var(--fc-border-strong)'}/>
+        </div>
+
+        {/* Category chips */}
+        <div>
+          <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+              color:'var(--fc-fg-3)',display:'block',marginBottom:8}}>Categoría</label>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {cats.map(c=>{
+              const active=category===c.id;
+              return (
+                <div key={c.id} onClick={()=>setCategory(c.id)}
+                  style={{display:'inline-flex',alignItems:'center',gap:6,padding:'7px 12px',borderRadius:999,
+                    fontSize:12,fontWeight:600,cursor:'pointer',transition:'all var(--fc-dur-fast) var(--fc-ease)',
+                    background:active?'var(--fc-violet-tint)':'var(--fc-surface)',
+                    border:`1px solid ${active?'var(--fc-violet-ring)':'var(--fc-border-strong)'}`,
+                    color:active?'var(--fc-violet-hi)':'var(--fc-fg-2)'}}>
+                  <Icon name={c.icon} size={12}/>
+                  {c.label}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Date */}
+        <div className="date-source-grid">
+          <div>
+            <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>Fecha</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+              style={{width:'100%',height:44,background:'var(--fc-surface)',
+                border:'1px solid var(--fc-border-strong)',borderRadius:12,padding:'0 14px',
+                color:'var(--fc-fg-1)',fontSize:13,outline:'none',fontFamily:'var(--fc-font-sans)'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>Fuente</label>
+            <div style={{display:'flex',gap:4,background:'var(--fc-surface)',
+                border:'1px solid var(--fc-border-strong)',borderRadius:12,padding:4}}>
+              {[['efectivo','💵 Efectivo'],['digital','💳 Digital']].map(([v,l])=>(
+                <button key={v} onClick={()=>{setSource(v);if(v==='efectivo')setWallet('efectivo');else if(digitalWallets.length>0)setWallet(digitalWallets[0]);}}
+                  style={{flex:1,padding:'8px 6px',borderRadius:9,fontSize:12,fontWeight:600,
+                    border:'none',cursor:'pointer',fontFamily:'var(--fc-font-sans)',transition:'all .18s',
+                    background:source===v?'var(--fc-violet-tint)':'transparent',
+                    color:source===v?'var(--fc-violet-hi)':'var(--fc-fg-3)'}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Wallet picker */}
+        {source==='digital' && (
+          <div style={{animation:'fcSlideUp .2s var(--fc-ease) both'}}>
+            <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                color:'var(--fc-fg-3)',display:'block',marginBottom:8}}>
+              {type==='expense'?'¿Desde qué billetera salió?':'¿En qué billetera entró?'}
+            </label>
+            {digitalWallets.length===0 ? (
+              <div style={{padding:14,borderRadius:12,background:'var(--fc-surface)',
+                  border:'1px solid var(--fc-border-strong)',textAlign:'center'}}>
+                <p style={{fontSize:12,color:'var(--fc-fg-3)',marginBottom:6}}>Sin billeteras digitales activas</p>
+              </div>
+            ) : (
+              <>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:featured.length>0&&extra.length>0?8:0}}>
+                  {featured.map(wid=>{
+                    const bank=ARG_BANKS.find(b=>b.id===wid);
+                    if(!bank) return null;
+                    const wBal=walletBalance(wid);
+                    const req=parseFloat(amount)||0;
+                    const insuf=type==='expense'&&req>0&&wBal<req;
+                    const sel=wallet===wid&&!selInExtra;
                     return (
-                      <button key={key} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:key})); }}
-                        style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:6,
-                          padding:"12px 13px",borderRadius:13,border:"2px solid",
-                          fontFamily:"inherit",background:"none",transition:"all .22s",textAlign:"left",
-                          cursor:insuf?"not-allowed":"pointer",opacity:insuf?.38:1,
-                          borderColor:insuf?"#1E293B":sel?color:"#1E293B",
-                          background:insuf?"#0F172A":sel?color+"12":"#1E293B"}}>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%"}}>
-                          <div style={{display:"flex",alignItems:"center",gap:7}}>
-                            <div style={{width:26,height:26,borderRadius:7,background:color+(sel&&!insuf?"28":"18"),
-                                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                              <WI size={13} color={color}/>
-                            </div>
-                            <span style={{fontSize:12,fontWeight:700,color:insuf?"#334155":sel?color:"#94A3B8"}}>
-                              {label}
-                            </span>
-                          </div>
-                          {insuf&&<span style={{fontSize:9,fontWeight:700,color:"#F472B6",
-                              background:"rgba(244,114,182,.12)",borderRadius:6,padding:"2px 6px",
-                              border:"1px solid rgba(244,114,182,.2)",whiteSpace:"nowrap"}}>sin saldo</span>}
+                      <button key={wid} onClick={()=>{if(!insuf){setWallet(wid);setDropOpen(false);}}}
+                        style={{display:'flex',flexDirection:'column',gap:5,padding:'11px 13px',
+                          borderRadius:12,border:`1.5px solid ${insuf?'var(--fc-border)':sel?bank.color:' var(--fc-border-strong)'}`,
+                          background:insuf?'var(--fc-bg)':sel?bank.color+'12':'var(--fc-surface)',
+                          cursor:insuf?'not-allowed':'pointer',opacity:insuf?.4:1,
+                          fontFamily:'var(--fc-font-sans)',transition:'all .18s',textAlign:'left'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <BankBadge bankId={wid} size={24}/>
+                          <span style={{fontSize:12,fontWeight:700,color:insuf?'var(--fc-fg-3)':sel?bank.color:'var(--fc-fg-2)'}}>
+                            {bank.name}
+                          </span>
+                          {insuf&&<span style={{fontSize:9,fontWeight:700,color:'var(--fc-pink)',
+                              background:'var(--fc-pink-tint)',borderRadius:5,padding:'1px 5px'}}>sin saldo</span>}
                         </div>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",marginTop:2}}>
-                          <span style={{fontSize:10,color:insuf?"#334155":sel?color+"CC":"#475569"}}>{sub}</span>
-                          <span style={{fontSize:10,fontWeight:700,color:insuf?"#475569":wBal>0?"#34D399":"#64748B"}}>
-                            {wBal>=0?"+":""}{fARS(wBal)}
+                        <div style={{display:'flex',justifyContent:'space-between'}}>
+                          <span style={{fontSize:10,color:'var(--fc-fg-3)'}}>{bank.type}</span>
+                          <span style={{fontSize:10,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                              color:wBal>0?'var(--fc-green)':'var(--fc-fg-3)'}}>
+                            {fmt(wBal,wBal>=0?'+':'−')}
                           </span>
                         </div>
                       </button>
                     );
                   })}
                 </div>
-              </div>
-            )}
 
-            {/* Recurring toggle (expenses only) */}
-            {form.type==="expense" && (
-              <div style={{marginBottom: form.recurring ? 14 : 20}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
-                  ¿QUÉ TIPO DE GASTO ES?
-                </label>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[{val:false,label:"Puntual",sub:"Compra, café, salida…",icon:"🛒",color:"#818CF8"},
-                    {val:true, label:"Fijo mensual",sub:"Alquiler, seguro, wifi…",icon:"📅",color:"#FBBF24"}].map(
-                    ({val,label,sub,icon,color})=>(
-                      <button key={String(val)} onClick={()=>setForm(f=>({...f,recurring:val,dueDay:val?f.dueDay:""}))}
-                        style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:4,
-                          padding:"11px 13px",borderRadius:13,border:"2px solid",cursor:"pointer",
-                          fontFamily:"inherit",background:"none",transition:"all .2s",textAlign:"left",
-                          borderColor:form.recurring===val?color:"#1E293B",
-                          background:form.recurring===val?color+"12":"#1E293B"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:6}}>
-                          <span style={{fontSize:14}}>{icon}</span>
-                          <span style={{fontSize:12,fontWeight:700,color:form.recurring===val?color:"#94A3B8"}}>{label}</span>
-                        </div>
-                        <span style={{fontSize:10,color:form.recurring===val?color+"BB":"#475569"}}>{sub}</span>
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Due day — only when recurring */}
-            {form.type==="expense" && form.recurring && (
-              <div style={{marginBottom:20,animation:"fu .2s ease-out both"}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
-                  ¿QUÉ DÍA DEL MES VENCE?{" "}
-                  <span style={{color:"#475569",fontWeight:400}}>(opcional)</span>
-                </label>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",borderRadius:12,
-                      padding:"11px 16px",border:`1px solid ${form.dueDay?"#FBBF24":"#334155"}`,flex:1}}>
-                    <Calendar size={14} color="#FBBF24"/>
-                    <input type="number" min="1" max="31" value={form.dueDay}
-                      onChange={e=>setForm(f=>({...f,dueDay:e.target.value}))}
-                      placeholder="Ej: 5"
-                      style={{background:"none",border:"none",outline:"none",flex:1,
-                          fontSize:14,color:"#F1F5F9",fontFamily:"inherit",width:"100%"}}/>
-                    {form.dueDay && <span style={{fontSize:12,color:"#64748B",whiteSpace:"nowrap"}}>de cada mes</span>}
+                {extra.length>0 && (
+                  <div>
+                    <button onClick={()=>setDropOpen(d=>!d)}
+                      style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'10px 13px',
+                        borderRadius:11,border:`1.5px solid ${selInExtra?ARG_BANKS.find(b=>b.id===selInExtra)?.color||'var(--fc-violet)':dropOpen?'var(--fc-violet)':'var(--fc-border-strong)'}`,
+                        cursor:'pointer',fontFamily:'var(--fc-font-sans)',fontSize:12,fontWeight:600,
+                        transition:'all .18s',background:selInExtra||dropOpen?'var(--fc-violet-tint)':'var(--fc-surface)',
+                        color:selInExtra?ARG_BANKS.find(b=>b.id===selInExtra)?.color||'var(--fc-violet-hi)':dropOpen?'var(--fc-violet-hi)':'var(--fc-fg-3)'}}>
+                      <Icon name="chevronDown" size={14}
+                        style={{transform:dropOpen?'rotate(180deg)':'rotate(0)',transition:'transform .2s'}}/>
+                      <span style={{flex:1,textAlign:'left'}}>
+                        {selInExtra?ARG_BANKS.find(b=>b.id===selInExtra)?.name:'Más billeteras'}
+                      </span>
+                      <span style={{fontSize:10,background:'var(--fc-surface-2)',padding:'2px 7px',
+                          borderRadius:20,color:'var(--fc-fg-3)'}}>+{extra.length}</span>
+                    </button>
+                    {dropOpen && (
+                      <div style={{background:'var(--fc-surface-2)',border:'1px solid var(--fc-border-strong)',
+                          borderRadius:11,overflow:'hidden',marginTop:4,animation:'fcSlideUp .15s var(--fc-ease) both'}}>
+                        {extra.map(wid=>{
+                          const bank=ARG_BANKS.find(b=>b.id===wid); if(!bank) return null;
+                          const wBal=walletBalance(wid);
+                          const sel2=wallet===wid;
+                          return (
+                            <div key={wid} onClick={()=>{setWallet(wid);setDropOpen(false);}}
+                              style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',
+                                cursor:'pointer',borderBottom:'1px solid var(--fc-divider)',
+                                background:sel2?'var(--fc-violet-tint)':'transparent',
+                                transition:'background var(--fc-dur-fast) var(--fc-ease)'}}
+                              onMouseEnter={e=>{if(!sel2)e.currentTarget.style.background='var(--fc-surface-3)';}}
+                              onMouseLeave={e=>{if(!sel2)e.currentTarget.style.background='transparent';}}>
+                              <BankBadge bankId={wid} size={28}/>
+                              <div style={{flex:1}}>
+                                <span style={{fontSize:12,fontWeight:600,color:sel2?'var(--fc-violet-hi)':'var(--fc-fg-1)'}}>
+                                  {bank.name}
+                                </span>
+                              </div>
+                              <span style={{fontSize:11,fontWeight:700,fontVariantNumeric:'tabular-nums',
+                                  color:wBal>0?'var(--fc-green)':'var(--fc-fg-3)'}}>
+                                {fmt(wBal,wBal>=0?'+':'−')}
+                              </span>
+                              {sel2&&<Icon name="check" size={14} stroke={2} style={{color:'var(--fc-violet-hi)',flexShrink:0}}/>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                </div>
-                <p style={{fontSize:11,color:"#64748B",marginTop:6}}>
-                  📍 Te avisamos cuando vence en los próximos 7 días
-                </p>
-              </div>
+                )}
+              </>
             )}
-
-            {/* Submit */}
-            <button className="btn-p" onClick={addTx}
-              disabled={!form.amount||!form.description||
-                (form.type==="expense"&&form.source==="digital"&&
-                 parseFloat(form.amount)>0&&walletBalance(form.wallet)<parseFloat(form.amount))}
-              style={{background:form.type==="expense"
-                ?"linear-gradient(135deg,#DC2626,#BE123C)"
-                :"linear-gradient(135deg,#059669,#047857)"}}>
-              {form.type==="expense"&&form.source==="digital"&&
-               parseFloat(form.amount)>0&&walletBalance(form.wallet)<parseFloat(form.amount)
-                ?"Saldo insuficiente":"Guardar Movimiento"}
-            </button>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Fixed toggle */}
+        {type==='expense' && (
+          <div>
+            <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                color:'var(--fc-fg-3)',display:'block',marginBottom:8}}>¿Qué tipo de gasto?</label>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+              {[[false,'🛒 Puntual','Compra, café…'],[true,'📅 Fijo mensual','Alquiler, wifi…']].map(([v,lbl,sub])=>(
+                <button key={String(v)} onClick={()=>setFixed(v)}
+                  style={{display:'flex',flexDirection:'column',gap:4,padding:'11px 13px',
+                    borderRadius:12,border:`1.5px solid ${fixed===v?'var(--fc-violet-ring)':'var(--fc-border-strong)'}`,
+                    background:fixed===v?'var(--fc-violet-tint)':'var(--fc-surface)',
+                    cursor:'pointer',fontFamily:'var(--fc-font-sans)',transition:'all .18s',textAlign:'left'}}>
+                  <span style={{fontSize:12,fontWeight:700,color:fixed===v?'var(--fc-violet-hi)':'var(--fc-fg-2)'}}>{lbl}</span>
+                  <span style={{fontSize:10,color:fixed===v?'var(--fc-violet-hi)':'var(--fc-fg-3)',opacity:.8}}>{sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Due day */}
+        {type==='expense' && fixed && (
+          <div style={{animation:'fcSlideUp .2s var(--fc-ease) both'}}>
+            <label style={{fontSize:10,fontWeight:700,letterSpacing:'0.1em',textTransform:'uppercase',
+                color:'var(--fc-fg-3)',display:'block',marginBottom:6}}>
+              Día de vencimiento <span style={{fontWeight:400,textTransform:'none',letterSpacing:0}}>(opcional)</span>
+            </label>
+            <div style={{display:'flex',alignItems:'center',gap:10,background:'var(--fc-surface)',
+                border:`1px solid ${dueDay?'var(--fc-amber)':'var(--fc-border-strong)'}`,borderRadius:12,
+                padding:'0 14px',height:44}}>
+              <Icon name="calendar" size={14} style={{color:'var(--fc-amber)',flexShrink:0}}/>
+              <input type="number" min="1" max="31" value={dueDay}
+                onChange={e=>setDueDay(e.target.value)} placeholder="Ej: 5"
+                style={{background:'none',border:'none',outline:'none',flex:1,
+                    fontSize:14,color:'var(--fc-fg-1)',fontFamily:'var(--fc-font-sans)'}}/>
+              {dueDay&&<span style={{fontSize:12,color:'var(--fc-fg-3)',whiteSpace:'nowrap'}}>de cada mes</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Submit */}
+        <button disabled={!valid} onClick={submit}
+          style={{width:'100%',height:48,borderRadius:14,border:0,color:'#fff',marginTop:2,
+            background:type==='expense'?'#8b1a2f':'#1a5c3d',
+            boxShadow:valid?'var(--fc-shadow-2)':'none',
+            fontSize:14,fontWeight:700,opacity:valid?1:0.45,fontFamily:'var(--fc-font-sans)',cursor:valid?'pointer':'not-allowed'}}>
+          Guardar movimiento
+        </button>
+      </div>
     </div>
   );
 }
+
+// Inject global CSS
+const styleEl = document.createElement('style');
+styleEl.textContent = GLOBAL_CSS;
+document.head.appendChild(styleEl);
