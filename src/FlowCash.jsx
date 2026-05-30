@@ -828,7 +828,7 @@ function AppContent({ session, onLogout }) {
 
       {/* TOP BAR */}
       <div style={{display:'flex',alignItems:'center',gap:14,padding:'18px 28px',
-          background:'transparent',position:'sticky',top:0,zIndex:100,
+          position:'sticky',top:0,zIndex:100,
           backdropFilter:'blur(16px)',background:'rgba(12,14,26,0.85)',
           borderBottom:'1px solid var(--fc-border)'}}>
         <div style={{display:'flex',alignItems:'center',gap:12,marginRight:'auto'}}>
