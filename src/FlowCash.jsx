@@ -43,6 +43,46 @@ const WALLETS = {
   mercadopago: { label:"Mercado Pago", color:"#00BCFF", Icon: CreditCard },
   lemoncash:   { label:"Lemon Cash",   color:"#FFD700", Icon: Smartphone },
 };
+
+/* ─── Catálogo completo de bancos y billeteras argentinas ── */
+const ARG_BANKS = [
+  // Bancos
+  { id:"galicia",    name:"Galicia",        color:"#FF6E00", initials:"G",  type:"Banco"     },
+  { id:"santander",  name:"Santander",       color:"#EC0000", initials:"S",  type:"Banco"     },
+  { id:"bbva",       name:"BBVA",            color:"#004481", initials:"B",  type:"Banco"     },
+  { id:"macro",      name:"Macro",           color:"#0E2A8C", initials:"M",  type:"Banco"     },
+  { id:"icbc",       name:"ICBC",            color:"#C8102E", initials:"I",  type:"Banco"     },
+  { id:"nacion",     name:"Banco Nación",    color:"#1F4E79", initials:"N",  type:"Banco"     },
+  { id:"provincia",  name:"Banco Provincia", color:"#16A085", initials:"P",  type:"Banco"     },
+  { id:"ciudad",     name:"Banco Ciudad",    color:"#E63946", initials:"C",  type:"Banco"     },
+  { id:"brubank",    name:"Brubank",         color:"#7C5CFF", initials:"BR", type:"Banco"     },
+  { id:"hsbc",       name:"HSBC",            color:"#DB0011", initials:"H",  type:"Banco"     },
+  { id:"supervielle",name:"Supervielle",     color:"#FF6600", initials:"SV", type:"Banco"     },
+  // Billeteras
+  { id:"mercadopago",name:"Mercado Pago",    color:"#00B0FF", initials:"M",  type:"Billetera" },
+  { id:"naranjax",   name:"Naranja X",       color:"#FF6B1A", initials:"NX", type:"Billetera" },
+  { id:"uala",       name:"Ualá",            color:"#22D39A", initials:"U",  type:"Billetera" },
+  { id:"modo",       name:"MODO",            color:"#3B47F1", initials:"MO", type:"Billetera" },
+  { id:"reba",       name:"Reba",            color:"#FF4D7D", initials:"R",  type:"Billetera" },
+  { id:"lemoncash",  name:"Lemon Cash",      color:"#FFD700", initials:"L",  type:"Billetera" },
+  { id:"paypal",     name:"PayPal",          color:"#003087", initials:"PP", type:"Billetera" },
+];
+// helper para obtener info de banco/billetera por id
+const getBank = id => id === "efectivo"
+  ? { id:"efectivo", name:"Efectivo", color:"#34D399", initials:"E", type:"Efectivo" }
+  : ARG_BANKS.find(b => b.id === id);
+
+/* ─── Persistencia de billeteras conectadas ─────────────── */
+const WALLETS_KEY = uid => `fc_wallets_${uid}`;
+const loadWallets = uid => {
+  try {
+    const s = localStorage.getItem(WALLETS_KEY(uid));
+    return s ? JSON.parse(s) : ["efectivo"];
+  } catch { return ["efectivo"]; }
+};
+const saveWallets = (uid, ids) => {
+  try { localStorage.setItem(WALLETS_KEY(uid), JSON.stringify(ids)); } catch {}
+};
 const MOCK_API = [
   { id:"mp1", type:"expense", amount:2850,  category:"Alimentación",    description:"Supermercado Dia",      date:"2025-07-10", source:"digital", wallet:"mercadopago", recurring:false },
   { id:"mp2", type:"expense", amount:1200,  category:"Transporte",      description:"SUBE - recarga",        date:"2025-07-09", source:"digital", wallet:"mercadopago", recurring:false },
@@ -254,6 +294,258 @@ function DonutWithTooltip({ data, total }) {
             textTransform:"uppercase",letterSpacing:.4}}>Total</p>
         <p style={{fontSize:14,fontWeight:800,color:"#E2E8F0"}}>{fARS(total)}</p>
       </div>
+    </div>
+  );
+}
+
+/* ─── BankBadge ─────────────────────────────────────────── */
+function BankBadge({ id, size=40 }) {
+  const bank = getBank(id);
+  if (!bank) return null;
+  return (
+    <span style={{width:size,height:size,borderRadius:Math.round(size*.26),display:"inline-flex",
+        alignItems:"center",justifyContent:"center",background:bank.color,flex:"none",
+        fontSize:Math.round(size*.36),fontWeight:700,color:"#fff",flexShrink:0}}>
+      {bank.initials?.slice(0,2)}
+    </span>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════
+   BANKS PAGE — página completa de gestión de bancos
+════════════════════════════════════════════════════════════ */
+function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
+  const [local, setLocal]   = useState([...connectedIds]);
+  const [view, setView]     = useState("connected");
+  const [search, setSearch] = useState("");
+
+  const toggle = id => {
+    if (id === "efectivo") return;
+    setLocal(prev => prev.includes(id) ? prev.filter(k=>k!==id) : [...prev, id]);
+  };
+
+  const connectedNoEf = local.filter(id => id !== "efectivo");
+  const totalBanks    = connectedNoEf.reduce((s,id) => s + Math.max(0, walletBalance(id)), 0);
+
+  const bancos    = ARG_BANKS.filter(b => b.type==="Banco"     && b.name.toLowerCase().includes(search.toLowerCase()));
+  const billeteras= ARG_BANKS.filter(b => b.type==="Billetera" && b.name.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="fc">
+      {/* Header de la página */}
+      <header className="glass" style={{position:"sticky",top:0,zIndex:40,padding:"11px 20px",
+          display:"flex",alignItems:"center",gap:14}}>
+        <button onClick={onClose}
+          style={{width:34,height:34,borderRadius:10,background:"#1E293B",border:"1px solid #334155",
+            cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#94A3B8"}}>
+          <X size={16}/>
+        </button>
+        <span style={{fontWeight:700,fontSize:17}}>Mis Bancos</span>
+      </header>
+
+      <div className="wrap">
+        {/* Summary card */}
+        <div className="card" style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            marginBottom:20,gap:16}}>
+          <div>
+            <h2 style={{fontSize:16,fontWeight:700,marginBottom:4}}>Mis bancos & billeteras</h2>
+            <p style={{fontSize:12,color:"#64748B"}}>Conectá tus cuentas para ver el saldo unificado en tu Dashboard.</p>
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            <p style={{fontSize:10,fontWeight:700,color:"#64748B",letterSpacing:".08em",
+                textTransform:"uppercase",marginBottom:4}}>TOTAL EN BANCOS</p>
+            <p style={{fontSize:26,fontWeight:800,color:"#F1F5F9"}}>{fARS(totalBanks)}</p>
+            <p style={{fontSize:11,color:"#64748B",marginTop:2}}>{connectedNoEf.length} cuentas vinculadas</p>
+          </div>
+        </div>
+
+        {/* Tabs Conectados / Directorio */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",background:"#0F172A",
+            border:"1px solid #1E293B",borderRadius:14,padding:5,gap:4,marginBottom:20}}>
+          {[["connected",`Conectados  ${connectedNoEf.length}`],["directory",`Directorio  ${ARG_BANKS.length}`]].map(([v,l])=>(
+            <div key={v} onClick={()=>setView(v)}
+              style={{padding:"12px",borderRadius:11,fontSize:14,fontWeight:600,textAlign:"center",
+                cursor:"pointer",transition:"all .15s",
+                color:view===v?"#818CF8":"#475569",
+                background:view===v?"rgba(99,102,241,.15)":"transparent"}}>
+              {l}
+            </div>
+          ))}
+        </div>
+
+        {/* ── Tab: Conectados ── */}
+        {view==="connected" && (
+          connectedNoEf.length === 0 ? (
+            <div className="card" style={{textAlign:"center",padding:"48px 24px"}}>
+              <div style={{fontSize:48,marginBottom:16}}>🏦</div>
+              <h2 style={{fontSize:18,fontWeight:700,marginBottom:8}}>Sin bancos conectados</h2>
+              <p style={{color:"#64748B",fontSize:13,marginBottom:20,lineHeight:1.6}}>
+                Vinculá tu primera cuenta para ver tu saldo real al instante.
+              </p>
+              <button onClick={()=>setView("directory")}
+                style={{padding:"11px 24px",borderRadius:12,background:"linear-gradient(135deg,#6366F1,#8B5CF6)",
+                  color:"#fff",border:"none",cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>
+                + Conectar un banco
+              </button>
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              {connectedNoEf.map(id => {
+                const bank = ARG_BANKS.find(b=>b.id===id); if(!bank) return null;
+                const bal  = walletBalance(id);
+                return (
+                  <div key={id} className="card" style={{position:"relative",overflow:"hidden"}}>
+                    {/* Glow background */}
+                    <div style={{position:"absolute",right:-40,top:-40,width:160,height:160,borderRadius:"50%",
+                        background:bank.color,opacity:.07,filter:"blur(4px)",pointerEvents:"none"}}/>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                        marginBottom:16,position:"relative"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:12}}>
+                        <BankBadge id={id} size={44}/>
+                        <div>
+                          <p style={{fontSize:16,fontWeight:700}}>{bank.name}</p>
+                          <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
+                            {bank.type} · •••• {1000+bank.id.length*137}
+                          </p>
+                        </div>
+                      </div>
+                      <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:999,fontSize:10,
+                          fontWeight:700,color:"#34D399",background:"rgba(52,211,153,.12)",
+                          border:"1px solid rgba(52,211,153,.3)"}}>CONECTADO</span>
+                    </div>
+                    <p style={{fontSize:28,fontWeight:800,color:bal>=0?"#F1F5F9":"#F472B6",
+                        position:"relative",marginBottom:4}}>
+                      {bal>=0?"+":""}{fARS(bal)}
+                    </p>
+                    <p style={{fontSize:12,color:"#64748B",marginBottom:16}}>Saldo neto del período</p>
+                    <div style={{display:"flex",gap:8}}>
+                      <button style={{padding:"8px 14px",borderRadius:10,background:"#1E293B",
+                          border:"1px solid #334155",color:"#94A3B8",cursor:"pointer",
+                          fontSize:12,fontWeight:600,fontFamily:"inherit"}}>Ver movimientos</button>
+                      <button onClick={()=>toggle(id)}
+                        style={{padding:"8px 14px",borderRadius:10,background:"none",
+                          border:"none",color:"#64748B",cursor:"pointer",
+                          fontSize:12,fontWeight:600,fontFamily:"inherit"}}>Desconectar</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )
+        )}
+
+        {/* ── Tab: Directorio ── */}
+        {view==="directory" && (
+          <div style={{display:"flex",flexDirection:"column",gap:20}}>
+            {/* Search */}
+            <div style={{display:"flex",alignItems:"center",gap:8,background:"#0F172A",
+                border:"1px solid #1E293B",borderRadius:14,padding:"12px 16px"}}>
+              <Search size={15} color="#475569"/>
+              <input value={search} onChange={e=>setSearch(e.target.value)}
+                placeholder="Buscar tu banco o billetera…"
+                style={{background:"none",border:"none",outline:"none",flex:1,fontSize:14,
+                  color:"#F1F5F9",fontFamily:"inherit"}}/>
+            </div>
+
+            {/* Bancos */}
+            {[{title:"Bancos",items:bancos},{title:"Billeteras virtuales",items:billeteras}].map(({title,items})=>(
+              <div key={title} className="card" style={{padding:0,overflow:"hidden"}}>
+                <p style={{fontSize:14,fontWeight:700,padding:"16px 20px 10px"}}>{title}</p>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)"}}>
+                  {items.map(b => {
+                    const linked = local.includes(b.id);
+                    return (
+                      <div key={b.id} onClick={()=>toggle(b.id)}
+                        style={{display:"flex",alignItems:"center",gap:12,padding:"13px 16px",
+                          borderTop:"1px solid #1E293B",borderLeft:"1px solid #1E293B",
+                          cursor:"pointer",transition:"background .15s",
+                          background:linked?"rgba(99,102,241,.1)":"transparent"}}
+                        onMouseEnter={e=>{if(!linked)e.currentTarget.style.background="#1E293B";}}
+                        onMouseLeave={e=>{if(!linked)e.currentTarget.style.background="transparent";}}>
+                        <BankBadge id={b.id} size={38}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</p>
+                          <p style={{fontSize:11,color:"#64748B",marginTop:1}}>{b.type}</p>
+                        </div>
+                        <span style={{width:22,height:22,borderRadius:7,flex:"none",display:"flex",
+                            alignItems:"center",justifyContent:"center",transition:"all .15s",
+                            background:linked?"#6366F1":"transparent",
+                            border:linked?"none":"1.5px solid #334155",color:"#fff",fontSize:13}}>
+                          {linked&&"✓"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+
+            <button onClick={()=>onSave(local)}
+              style={{width:"100%",padding:"14px",borderRadius:14,fontSize:15,fontWeight:700,
+                color:"#fff",border:"none",cursor:"pointer",fontFamily:"inherit",
+                background:"linear-gradient(135deg,#6366F1,#8B5CF6)"}}>
+              Guardar cambios
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Component: SourceLegend ────────────────────────────────
+   Primera billetera visible, el resto colapsable.
+   Ordenado de mayor a menor porcentaje (ya viene ordenado).
+─────────────────────────────────────────────────────────── */
+function SourceLegend({ items, total }) {
+  const [open, setOpen] = useState(false);
+  if (!items.length) return null;
+  const [first, ...rest] = items;
+  const pctFirst = total>0 ? Math.round((first.value/total)*100) : 0;
+  return (
+    <div style={{marginTop:10}}>
+      {/* Primera fila — siempre visible */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"10px 12px",borderRadius:10,background:"#1E293B",marginBottom:rest.length?6:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:9,height:9,borderRadius:"50%",background:first.color,flexShrink:0}}/>
+          <span style={{fontSize:12,fontWeight:600,color:"#CBD5E1"}}>{first.name}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:11,color:"#64748B"}}>{fARS(first.value)}</span>
+          <span style={{fontSize:13,fontWeight:800,color:first.color,minWidth:36,textAlign:"right"}}>
+            {pctFirst}%
+          </span>
+          {rest.length > 0 && (
+            <button onClick={()=>setOpen(!open)}
+              style={{background:"none",border:"none",cursor:"pointer",color:"#64748B",
+                display:"flex",alignItems:"center",padding:0,transition:"transform .2s",
+                transform:open?"rotate(180deg)":"rotate(0deg)"}}>
+              <ChevronRight size={14} style={{transform:"rotate(90deg)"}}/>
+            </button>
+          )}
+        </div>
+      </div>
+      {/* Resto — colapsable */}
+      {open && rest.map(d=>{
+        const pct = total>0 ? Math.round((d.value/total)*100) : 0;
+        return (
+          <div key={d.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"10px 12px",borderRadius:10,background:"#1E293B",marginBottom:6}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:9,height:9,borderRadius:"50%",background:d.color,flexShrink:0}}/>
+              <span style={{fontSize:12,fontWeight:600,color:"#CBD5E1"}}>{d.name}</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:11,color:"#64748B"}}>{fARS(d.value)}</span>
+              <span style={{fontSize:13,fontWeight:800,color:d.color,minWidth:36,textAlign:"right"}}>{pct}%</span>
+            </div>
+          </div>
+        );
+      })}
+      <p style={{fontSize:11,color:"#475569",marginTop:8,textAlign:"center"}}>
+        Total distribuido: <b style={{color:"#CBD5E1"}}>{fARS(total)}</b>
+      </p>
     </div>
   );
 }
@@ -475,6 +767,7 @@ function AppContent({ session, onLogout }) {
   const [tab, setTab]                       = useState("dashboard");
   const [showModal, setShowModal]           = useState(false);
   const [showLogout, setShowLogout]         = useState(false);
+  const [showBanks, setShowBanks]           = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [apiDone, setApiDone]               = useState(false);
   const [syncing, setSyncing]               = useState(false);
@@ -483,10 +776,22 @@ function AppContent({ session, onLogout }) {
   const [filterCat, setFilterCat]           = useState("all");
   const [query, setQuery]                   = useState("");
   const [toast, setToast]                   = useState(null);
-  const [form, setForm] = useState({
-    type:"expense", amount:"", category:"Alimentación",
-    description:"", date:new Date().toISOString().split("T")[0],
-    source:"digital", wallet:"mercadopago", recurring:false, dueDay:"",
+
+  // Billeteras/bancos conectados (persisten en localStorage)
+  const [connectedIds, setConnectedIds] = useState(() => loadWallets(userId));
+
+  const saveConnected = ids => {
+    saveWallets(userId, ids);
+    setConnectedIds(ids);
+    showToast("Billeteras guardadas ✓");
+  };
+  const [form, setForm] = useState(() => {
+    const firstDigital = connectedIds.find(id => id !== "efectivo") || "mercadopago";
+    return {
+      type:"expense", amount:"", category:"Alimentación",
+      description:"", date:new Date().toISOString().split("T")[0],
+      source:"digital", wallet:firstDigital, recurring:false, dueDay:"",
+    };
   });
 
   /* ── Computed ── */
@@ -524,17 +829,25 @@ function AppContent({ session, onLogout }) {
     .filter(d=>d.value>0)
     .sort((a,b)=>b.value-a.value);
 
-  const walletBalance = useCallback(key => {
-    const wt = txs.filter(t=>t.wallet===key);
+  const walletBalance = useCallback(id => {
+    // "efectivo" = transacciones con wallet==="manual" o source==="cash"
+    if (id === "efectivo") {
+      const wt = txs.filter(t => t.wallet==="manual" || t.source==="cash");
+      return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
+            -wt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+    }
+    const wt = txs.filter(t => t.wallet===id);
     return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
           -wt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
   }, [txs]);
 
-  const walletTotals = ["manual","mercadopago","lemoncash"].map(k=>({
-    name:WALLETS[k].label,
-    value:txs.filter(t=>t.wallet===k).reduce((s,t)=>s+t.amount,0),
-    color:WALLETS[k].color,
-  })).filter(d=>d.value>0);
+  // Totales para el donut — ordenados de mayor a menor
+  const walletTotals = connectedIds.map(id => {
+    const bank  = getBank(id);
+    const value = txs.filter(t => id==="efectivo" ? (t.wallet==="manual"||t.source==="cash") : t.wallet===id)
+                     .reduce((s,t) => s + t.amount, 0);
+    return { id, name: bank?.name||id, value, color: bank?.color||"#64748B" };
+  }).filter(d => d.value > 0).sort((a,b) => b.value - a.value);
   const walletTotal = walletTotals.reduce((s,d)=>s+d.value,0);
 
   // Gastos fijos
@@ -601,7 +914,7 @@ function AppContent({ session, onLogout }) {
       setShowModal(false);
       setForm({type:"expense",amount:"",category:"Alimentación",description:"",
                date:new Date().toISOString().split("T")[0],source:"digital",
-               wallet:"mercadopago",recurring:false,dueDay:""});
+               wallet:connectedIds.find(id=>id!=="efectivo")||"mercadopago",recurring:false,dueDay:""});
       showToast("Movimiento guardado ✓");
     } catch(e) {
       showToast(e.message || "Error al guardar", false);
@@ -766,6 +1079,20 @@ function AppContent({ session, onLogout }) {
     </div>
   );
 
+  // Página completa de bancos — reemplaza toda la UI
+  if (showBanks) return (
+    <>
+      <style>{css}</style>
+      <BanksPage
+        connectedIds={connectedIds}
+        txs={txs}
+        walletBalance={walletBalance}
+        onSave={ids=>{ saveConnected(ids); setShowBanks(false); }}
+        onClose={()=>setShowBanks(false)}
+      />
+    </>
+  );
+
   return (
     <div className="fc">
       <style>{css}</style>
@@ -795,6 +1122,24 @@ function AppContent({ session, onLogout }) {
               justifyContent:"center"}} title={email}>
             <User size={14} color="#818CF8"/>
           </div>
+          {/* Botón bancos con badge */}
+          <button onClick={()=>setShowBanks(true)}
+            style={{width:30,height:30,borderRadius:9,background:"rgba(99,102,241,.15)",
+              border:"1px solid rgba(99,102,241,.25)",display:"flex",alignItems:"center",
+              justifyContent:"center",cursor:"pointer",position:"relative",transition:"all .2s"}}
+            title="Mis bancos & billeteras"
+            onMouseEnter={e=>e.currentTarget.style.background="rgba(99,102,241,.3)"}
+            onMouseLeave={e=>e.currentTarget.style.background="rgba(99,102,241,.15)"}>
+            🏦
+            {connectedIds.filter(id=>id!=="efectivo").length > 0 && (
+              <span style={{position:"absolute",top:-5,right:-5,minWidth:16,height:16,
+                  borderRadius:999,background:"#6366F1",color:"#fff",fontSize:9,fontWeight:700,
+                  display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",
+                  border:"2px solid #020617"}}>
+                {connectedIds.filter(id=>id!=="efectivo").length}
+              </span>
+            )}
+          </button>
           <button onClick={()=>setShowLogout(true)}
             style={{width:30,height:30,borderRadius:9,background:"rgba(244,114,182,.1)",
               border:"1px solid rgba(244,114,182,.2)",display:"flex",alignItems:"center",
@@ -861,25 +1206,27 @@ function AppContent({ session, onLogout }) {
 
               {/* Wallet balances */}
               <div className="card">
-                <p style={{fontSize:13,fontWeight:700,marginBottom:3}}>Saldo por Billetera</p>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+                  <p style={{fontSize:13,fontWeight:700}}>Saldo por Billetera</p>
+                  <button onClick={()=>setShowBanks(true)}
+                    style={{fontSize:12,color:"#818CF8",background:"none",border:"none",cursor:"pointer",
+                      fontFamily:"inherit",fontWeight:600}}>Gestionar →</button>
+                </div>
                 <p style={{fontSize:11,color:"#64748B",marginBottom:14}}>Balance neto por fuente (ingresos − gastos)</p>
                 <div style={{display:"flex",flexDirection:"column",gap:9}}>
-                  {["manual",...Object.keys(WALLETS).filter(k=>k!=="manual"&&txs.some(t=>t.wallet===k))].map(key=>{
-                    const bal=walletBalance(key), w=WALLETS[key], WI=w.Icon;
-                    const subs={manual:"Efectivo / sin billetera asignada",mercadopago:"Billetera digital Argentina",lemoncash:"Cripto + ARS"};
+                  {connectedIds.map(id => {
+                    const bank = getBank(id); if(!bank) return null;
+                    const bal  = walletBalance(id);
                     return (
-                      <div key={key} style={{display:"flex",alignItems:"center",gap:12,
+                      <div key={id} style={{display:"flex",alignItems:"center",gap:12,
                           background:"#1E293B",borderRadius:13,padding:"12px 14px"}}>
-                        <div style={{width:36,height:36,borderRadius:10,background:w.color+"18",
-                            border:`1px solid ${w.color}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                          <WI size={16} color={w.color}/>
-                        </div>
+                        <BankBadge id={id} size={36}/>
                         <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:13,fontWeight:600,color:"#CBD5E1"}}>{w.label}</p>
-                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{subs[key]}</p>
+                          <p style={{fontSize:13,fontWeight:600,color:"#CBD5E1"}}>{bank.name}</p>
+                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{bank.type}</p>
                         </div>
                         <div style={{textAlign:"right",flexShrink:0}}>
-                          <p style={{fontSize:15,fontWeight:800,color:bal>=0?w.color:"#F472B6"}}>
+                          <p style={{fontSize:15,fontWeight:800,color:bal>=0?bank.color:"#F472B6"}}>
                             {bal>=0?"+":""}{fARS(bal)}
                           </p>
                           <p style={{fontSize:10,color:"#475569",marginTop:1}}>{bal>=0?"superávit":"déficit"}</p>
@@ -1146,26 +1493,7 @@ function AppContent({ session, onLogout }) {
                   ) : (
                     <>
                       <DonutWithTooltip data={walletTotals} total={walletTotal}/>
-                      <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:10}}>
-                        {walletTotals.map(d=>{
-                          const pct=walletTotal>0?Math.round((d.value/walletTotal)*100):0;
-                          return (
-                            <div key={d.name}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                                <div style={{display:"flex",alignItems:"center",gap:7}}>
-                                  <div style={{width:9,height:9,borderRadius:"50%",background:d.color,flexShrink:0}}/>
-                                  <span style={{fontSize:12,fontWeight:600,color:"#CBD5E1"}}>{d.name}</span>
-                                </div>
-                                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                                  <span style={{fontSize:11,color:"#64748B"}}>{fARS(d.value)}</span>
-                                  <span style={{fontSize:13,fontWeight:800,color:d.color,minWidth:36,textAlign:"right"}}>{pct}%</span>
-                                </div>
-                              </div>
-                              <div className="pb"><div className="pf" style={{width:`${pct}%`,background:d.color}}/></div>
-                            </div>
-                          );
-                        })}
-                      </div>
+                      <SourceLegend items={walletTotals} total={walletTotal}/>
                     </>
                   )}
                 </div>
@@ -1635,7 +1963,10 @@ function AppContent({ session, onLogout }) {
                 <div className="pill" style={{padding:3}}>
                   {[["cash","💵 Efec.","#34D399"],["digital","💳 Dig.","#60A5FA"]].map(([val,ico,col])=>(
                     <button key={val} className="pill-o"
-                      onClick={()=>setForm(f=>({...f,source:val,wallet:val==="cash"?"manual":"mercadopago"}))}
+                      onClick={()=>{
+                        const firstDigital = connectedIds.find(id=>id!=="efectivo")||"mercadopago";
+                        setForm(f=>({...f,source:val,wallet:val==="cash"?"manual":firstDigital}));
+                      }}
                       style={{...(form.source===val?{background:col+"22",color:col}:{}),fontSize:12}}>
                       {ico}
                     </button>
@@ -1644,51 +1975,52 @@ function AppContent({ session, onLogout }) {
               </div>
             </div>
 
-            {/* Digital wallet picker */}
+            {/* Digital wallet picker — chips de billeteras conectadas */}
             {form.source==="digital" && (
               <div style={{marginBottom:14,animation:"fu .2s ease-out both"}}>
                 <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
-                  {form.type==="expense"?"¿DESDE QUÉ BILLETERA SALIÓ?":"¿EN QUÉ BILLETERA ENTRÓ?"}
+                  BILLETERA
                 </label>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[{key:"mercadopago",label:"Mercado Pago",sub:"Billetera digital",color:"#00BCFF",Icon:CreditCard},
-                    {key:"lemoncash",  label:"Lemon Cash",  sub:"Cripto + ARS",    color:"#FFD700",Icon:Smartphone}].map(({key,label,sub,color,Icon:WI})=>{
-                    const wBal = walletBalance(key);
-                    const req  = parseFloat(form.amount)||0;
-                    const insuf = form.type==="expense"&&req>0&&wBal<req;
-                    const sel   = form.wallet===key;
-                    return (
-                      <button key={key} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:key})); }}
-                        style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:6,
-                          padding:"12px 13px",borderRadius:13,border:"2px solid",
-                          fontFamily:"inherit",background:"none",transition:"all .22s",textAlign:"left",
-                          cursor:insuf?"not-allowed":"pointer",opacity:insuf?.38:1,
-                          borderColor:insuf?"#1E293B":sel?color:"#1E293B",
-                          background:insuf?"#0F172A":sel?color+"12":"#1E293B"}}>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%"}}>
-                          <div style={{display:"flex",alignItems:"center",gap:7}}>
-                            <div style={{width:26,height:26,borderRadius:7,background:color+(sel&&!insuf?"28":"18"),
-                                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                              <WI size={13} color={color}/>
-                            </div>
-                            <span style={{fontSize:12,fontWeight:700,color:insuf?"#334155":sel?color:"#94A3B8"}}>
-                              {label}
-                            </span>
+                {connectedIds.filter(id=>id!=="efectivo").length === 0 ? (
+                  <div style={{padding:"12px 16px",borderRadius:12,background:"#1E293B",
+                      border:"1px solid #334155",textAlign:"center"}}>
+                    <p style={{fontSize:12,color:"#64748B",marginBottom:6}}>Sin billeteras digitales conectadas</p>
+                    <button onClick={()=>{setShowModal(false);setShowBanks(true);}}
+                      style={{fontSize:12,fontWeight:600,color:"#818CF8",background:"none",
+                        border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
+                      Conectar billeteras
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {connectedIds.filter(id=>id!=="efectivo").map(id=>{
+                      const bank = getBank(id); if(!bank) return null;
+                      const wBal  = walletBalance(id);
+                      const req   = parseFloat(form.amount)||0;
+                      const insuf = form.type==="expense"&&req>0&&wBal<req;
+                      const sel   = form.wallet===id;
+                      return (
+                        <button key={id} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:id})); }}
+                          style={{display:"flex",alignItems:"center",gap:8,padding:"9px 13px",
+                            borderRadius:12,border:`2px solid ${insuf?"#1E293B":sel?bank.color:"#334155"}`,
+                            background:insuf?"#0F172A":sel?bank.color+"15":"#1E293B",
+                            cursor:insuf?"not-allowed":"pointer",opacity:insuf?.4:1,
+                            fontFamily:"inherit",transition:"all .2s"}}>
+                          <BankBadge id={id} size={24}/>
+                          <div style={{textAlign:"left"}}>
+                            <p style={{fontSize:12,fontWeight:700,color:insuf?"#334155":sel?bank.color:"#94A3B8"}}>
+                              {bank.name}
+                            </p>
+                            <p style={{fontSize:10,color:insuf?"#334155":wBal>0?"#34D399":"#64748B",fontWeight:600}}>
+                              {wBal>=0?"+":""}{fARS(wBal)}
+                              {insuf&&<span style={{color:"#F472B6"}}> · sin saldo</span>}
+                            </p>
                           </div>
-                          {insuf&&<span style={{fontSize:9,fontWeight:700,color:"#F472B6",
-                              background:"rgba(244,114,182,.12)",borderRadius:6,padding:"2px 6px",
-                              border:"1px solid rgba(244,114,182,.2)",whiteSpace:"nowrap"}}>sin saldo</span>}
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",marginTop:2}}>
-                          <span style={{fontSize:10,color:insuf?"#334155":sel?color+"CC":"#475569"}}>{sub}</span>
-                          <span style={{fontSize:10,fontWeight:700,color:insuf?"#475569":wBal>0?"#34D399":"#64748B"}}>
-                            {wBal>=0?"+":""}{fARS(wBal)}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
