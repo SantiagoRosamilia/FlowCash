@@ -11,7 +11,7 @@ import {
   Banknote, CreditCard, LogOut, User, Mail, Lock, Eye, EyeOff,
   AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff,
 } from "lucide-react";
-import { authApi, txApi, mpApi } from './api.js';
+import { authApi, txApi, walletApi, mpApi } from './api.js';
 
 /* ─── Session storage (solo email para mostrar en UI) ───────
    El JWT vive en api.js — nunca lo tocamos acá directamente.
@@ -71,18 +71,6 @@ const ARG_BANKS = [
 const getBank = id => id === "efectivo"
   ? { id:"efectivo", name:"Efectivo", color:"#34D399", initials:"E", type:"Efectivo" }
   : ARG_BANKS.find(b => b.id === id);
-
-/* ─── Persistencia de billeteras conectadas ─────────────── */
-const WALLETS_KEY = uid => `fc_wallets_${uid}`;
-const loadWallets = uid => {
-  try {
-    const s = localStorage.getItem(WALLETS_KEY(uid));
-    return s ? JSON.parse(s) : ["efectivo"];
-  } catch { return ["efectivo"]; }
-};
-const saveWallets = (uid, ids) => {
-  try { localStorage.setItem(WALLETS_KEY(uid), JSON.stringify(ids)); } catch {}
-};
 const MOCK_API = [
   { id:"mp1", type:"expense", amount:2850,  category:"Alimentación",    description:"Supermercado Dia",      date:"2025-07-10", source:"digital", wallet:"mercadopago", recurring:false },
   { id:"mp2", type:"expense", amount:1200,  category:"Transporte",      description:"SUBE - recarga",        date:"2025-07-09", source:"digital", wallet:"mercadopago", recurring:false },
@@ -757,13 +745,6 @@ function AppContent({ session, onLogout }) {
   const [loading, setLoading] = useState(true);
   const [netError, setNetError] = useState(null); // error de red
 
-  // Cargar transacciones del backend al montar
-  useEffect(() => {
-    txApi.getAll()
-      .then(data => { setTxs(data.transactions || []); setLoading(false); })
-      .catch(e  => { setNetError(e.message); setLoading(false); });
-  }, [userId]);
-
   const [tab, setTab]                       = useState("dashboard");
   const [showModal, setShowModal]           = useState(false);
   const [showLogout, setShowLogout]         = useState(false);
@@ -777,13 +758,33 @@ function AppContent({ session, onLogout }) {
   const [query, setQuery]                   = useState("");
   const [toast, setToast]                   = useState(null);
 
-  // Billeteras/bancos conectados (persisten en localStorage)
-  const [connectedIds, setConnectedIds] = useState(() => loadWallets(userId));
+  // Billeteras conectadas — se cargan del backend y se sincronizan
+  const [connectedIds, setConnectedIds] = useState(["efectivo"]);
+  const [walletsLoaded, setWalletsLoaded] = useState(false);
 
-  const saveConnected = ids => {
-    saveWallets(userId, ids);
-    setConnectedIds(ids);
-    showToast("Billeteras guardadas ✓");
+  // Cargar transacciones y billeteras del backend al montar
+  useEffect(() => {
+    Promise.all([
+      txApi.getAll(),
+      walletApi.getAll().catch(() => ({ wallets: ["efectivo"] })),
+    ]).then(([txData, wData]) => {
+      setTxs(txData.transactions || []);
+      const ws = wData.wallets || ["efectivo"];
+      if (!ws.includes("efectivo")) ws.unshift("efectivo");
+      setConnectedIds(ws);
+      setWalletsLoaded(true);
+      setLoading(false);
+    }).catch(e => { setNetError(e.message); setLoading(false); });
+  }, [userId]);
+
+  const saveConnected = async ids => {
+    try {
+      await walletApi.save(ids);
+      setConnectedIds(ids);
+      showToast("Billeteras guardadas ✓");
+    } catch(e) {
+      showToast(e.message || "Error al guardar", false);
+    }
   };
   const [form, setForm] = useState(() => {
     const firstDigital = connectedIds.find(id => id !== "efectivo") || "mercadopago";
@@ -1087,7 +1088,7 @@ function AppContent({ session, onLogout }) {
         connectedIds={connectedIds}
         txs={txs}
         walletBalance={walletBalance}
-        onSave={ids=>{ saveConnected(ids); setShowBanks(false); }}
+        onSave={async ids=>{ await saveConnected(ids); setShowBanks(false); }}
         onClose={()=>setShowBanks(false)}
       />
     </>
