@@ -10,30 +10,33 @@ import {
   Search, Key, Info, BookOpen, Smartphone, Trash2, Shield,
   Banknote, CreditCard, LogOut, User, Mail, Lock, Eye, EyeOff,
   AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff, Download,
-  ArrowLeftRight, PiggyBank, Users, Sparkles,
+  ArrowLeftRight, PiggyBank, Users, Sparkles, Edit3, CalendarOff, Layers,
 } from "lucide-react";
 import { authApi, txApi, walletApi, mpApi } from './api.js';
 
-/* ─── Session storage (solo email para mostrar en UI) ───────
-   El JWT vive en api.js — nunca lo tocamos acá directamente.
-   Solo guardamos el email del usuario para mostrarlo en el header.
-─────────────────────────────────────────────────────────── */
+/* ─── Session storage (solo email para mostrar en UI) ─────── */
 const SESSION_KEY = 'fc_session_v1';
 const loadSession = () => JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
 const saveSession = s  => sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
 const clearSession= () => { sessionStorage.removeItem(SESSION_KEY); authApi.logout(); };
 
-/* ─── Storage local para deudas saldadas ("Me deben") ───── */
-const SETTLED_KEY = 'fc_settled_splits_v1';
+/* ─── Storage local para deudas saldadas y overrides de Fijos/Cuotas ─── */
+const SETTLED_KEY        = 'fc_settled_splits_v1';
+const FIXED_OVERRIDE_KEY = 'fc_fixed_overrides_v1';
+
 const loadSettled = () => JSON.parse(localStorage.getItem(SETTLED_KEY) || '[]');
 const saveSettled = ids => localStorage.setItem(SETTLED_KEY, JSON.stringify(ids));
+
+// Guarda decisiones manuales del usuario: { [txId]: { mode: 'one-off' | 'fixed' | 'installments', currentInst, totalInst } }
+const loadFixedOverrides = () => JSON.parse(localStorage.getItem(FIXED_OVERRIDE_KEY) || '{}');
+const saveFixedOverrides = map => localStorage.setItem(FIXED_OVERRIDE_KEY, JSON.stringify(map));
 
 /* ─── Constants ─────────────────────────────────────────── */
 const EXPENSE_CATS    = ["Alimentación","Transporte","Entretenimiento","Salud","Ropa","Servicios","Otros"];
 const INCOME_CATS     = ["Sueldo","Freelance","Inversiones","Transferencia","Otros"];
 const INVESTMENT_CATS = ["Inversiones","Broker / Acciones","Cripto / USDT","Fondo Común / Staking","Ahorro"];
 
-/* Palabras clave que auto-activan "Fijo mensual" */
+/* Palabras clave que sugieren "Fijo mensual" */
 const FIXED_KEYWORDS = [
   "calistenia", "calis", "entrenamiento", "gimnasio", "gym",
   "cuota", "cuotas", "hbo", "netflix", "spotify", "nutricionista",
@@ -65,7 +68,6 @@ const WALLETS = {
 
 /* ─── Catálogo completo de bancos y billeteras argentinas ── */
 const ARG_BANKS = [
-  // Bancos
   { id:"galicia",    name:"Galicia",        color:"#FF6E00", initials:"G",  type:"Banco"     },
   { id:"santander",  name:"Santander",       color:"#EC0000", initials:"S",  type:"Banco"     },
   { id:"bbva",       name:"BBVA",            color:"#004481", initials:"B",  type:"Banco"     },
@@ -77,7 +79,6 @@ const ARG_BANKS = [
   { id:"brubank",    name:"Brubank",         color:"#7C5CFF", initials:"BR", type:"Banco"     },
   { id:"hsbc",       name:"HSBC",            color:"#DB0011", initials:"H",  type:"Banco"     },
   { id:"supervielle",name:"Supervielle",     color:"#FF6600", initials:"SV", type:"Banco"     },
-  // Billeteras
   { id:"mercadopago",name:"Mercado Pago",    color:"#00B0FF", initials:"M",  type:"Billetera" },
   { id:"naranjax",   name:"Naranja X",       color:"#FF6B1A", initials:"NX", type:"Billetera" },
   { id:"uala",       name:"Ualá",            color:"#22D39A", initials:"U",  type:"Billetera" },
@@ -86,7 +87,6 @@ const ARG_BANKS = [
   { id:"lemoncash",  name:"Lemon Cash",      color:"#FFD700", initials:"L",  type:"Billetera" },
   { id:"paypal",     name:"PayPal",          color:"#003087", initials:"PP", type:"Billetera" },
 ];
-// helper para obtener info de banco/billetera por id
 const getBank = id => id === "efectivo"
   ? { id:"efectivo", name:"Efectivo", color:"#34D399", initials:"E", type:"Efectivo" }
   : ARG_BANKS.find(b => b.id === id);
@@ -117,13 +117,11 @@ const fDateLong = d =>
   new Date(d+"T00:00:00").toLocaleDateString("es-AR",{
     day:"2-digit", month:"long", weekday:"long"
   }).replace(/^\w/,c=>c.toUpperCase());
-const uid = () => Math.random().toString(36).slice(2,10);
 
-/* ─── Clasificadores inteligentes (retrocompatibles con CSV/DB) ─── */
+/* ─── Clasificadores inteligentes ───────────────────────── */
 const isInternalTransfer = tx => {
   const d = (tx.description || "").toLowerCase();
   if (d.startsWith("[transferencia]")) return true;
-  // Detecta tus registros históricos de pases entre Efectivo y Lemon
   return [
     "de efectivo a lemon",
     "paso a lemon",
@@ -145,23 +143,81 @@ const isInvestmentTx = tx => {
   return false;
 };
 
-const isAutoFixedTx = tx => {
-  if (tx.recurring) return true;
+// Detecta si la descripción tiene etiqueta de cuotas: [Cuota 2/3] o texto como "cuotas mes 2"
+const parseInstallmentInfo = (tx, overridesMap = {}) => {
+  const ov = overridesMap[tx.id];
+  if (ov && ov.mode === "installments") {
+    return { current: Number(ov.currentInst) || 1, total: Number(ov.totalInst) || 3 };
+  }
+  const desc = tx.description || "";
+  const tagMatch = desc.match(/\[Cuota\s*(\d+)\s*\/\s*(\d+)\]/i);
+  if (tagMatch) {
+    return { current: parseInt(tagMatch[1], 10), total: parseInt(tagMatch[2], 10) };
+  }
+  const legacyMatch = desc.match(/cuotas?\s+mes\s+(\d+)(?:\s*de\s*(\d+))?/i);
+  if (legacyMatch) {
+    return { current: parseInt(legacyMatch[1], 10), total: legacyMatch[2] ? parseInt(legacyMatch[2], 10) : 3 };
+  }
+  return null;
+};
+
+// Verifica si un gasto en cuotas sigue vigente en el mes actual o ya terminó
+const isInstallmentStillActive = (tx, instInfo, refDate = new Date()) => {
+  if (!instInfo) return true;
+  const txDate = new Date(tx.date + "T00:00:00");
+  const monthsElapsed = (refDate.getFullYear() - txDate.getFullYear()) * 12 + (refDate.getMonth() - txDate.getMonth());
+  const remainingAfterTxMonth = instInfo.total - instInfo.current;
+  // Si los meses que pasaron desde que se anotó esa cuota superan las cuotas que quedaban, ya venció
+  return monthsElapsed <= remainingAfterTxMonth;
+};
+
+// Determina si un gasto es Fijo (respetando si el usuario le quitó el "fijo" manualmente o si es cuota vencida)
+const isEffectiveFixedTx = (tx, overridesMap = {}, refDate = new Date()) => {
   if (tx.type !== "expense" || isInternalTransfer(tx) || isInvestmentTx(tx)) return false;
+  const ov = overridesMap[tx.id];
+  if (ov) {
+    if (ov.mode === "one-off") return false; // El usuario lo desmarcó explícitamente
+    if (ov.mode === "installments") {
+      const inst = parseInstallmentInfo(tx, overridesMap);
+      return isInstallmentStillActive(tx, inst, refDate);
+    }
+    if (ov.mode === "fixed") return true;
+  }
   const d = (tx.description || "").toLowerCase();
+  if (d.includes("[puntual]")) return false;
+
+  const inst = parseInstallmentInfo(tx, overridesMap);
+  if (inst) {
+    return isInstallmentStillActive(tx, inst, refDate);
+  }
+
+  if (tx.recurring) return true;
+
   return FIXED_KEYWORDS.some(kw => {
     const r = new RegExp(`(^|\\s|[^a-záéíóúñ])${kw}($|\\s|[^a-záéíóúñ])`, "i");
     return r.test(d);
   });
 };
 
+// Agrupa conceptos fijos equivalentes (ej: "Calis", "Calistenia - Mes de agosto", "Entrenamiento")
+// para que no se sumen triplicados en "Compromisos Fijos del Mes"
+const getCommitmentGroupKey = tx => {
+  const d = cleanDisplayDescription(tx.description || "").toLowerCase();
+  if (["calis", "calistenia", "entrenamiento", "gimnasio", "gym"].some(k => d.includes(k))) {
+    return "grupo_entrenamiento_calistenia";
+  }
+  if (d.includes("nutricionista")) return "grupo_nutricionista";
+  if (d.includes("hbo"))           return "grupo_hbo";
+  if (d.includes("ropa") && d.includes("cuota")) return "grupo_ropa_cuotas";
+  return d.replace(/mes\s+de\s+\w+/g, "").replace(/\d+/g, "").trim() || d;
+};
+
 // Parsea si un gasto tiene formato de cuenta dividida:
-// "Hamburguesas [Mi parte: $30000 | Me deben: $88000 (Facu, Luzzi)]"
 const parseSplitInfo = tx => {
   const desc = tx.description || "";
   const match = desc.match(/\[Mi parte:\s*\$(\d+(?:\.\d+)?)\s*\|\s*Me deben:\s*\$(\d+(?:\.\d+)?)(?:\s*\(([^)]+)\))?\]/i);
   if (!match) return null;
-  const cleanDesc = desc.replace(match[0], "").trim();
+  const cleanDesc = cleanDisplayDescription(desc);
   return {
     cleanDesc: cleanDesc || desc,
     myShare:   parseFloat(match[1]) || 0,
@@ -170,7 +226,15 @@ const parseSplitInfo = tx => {
   };
 };
 
-// Devuelve el gasto real para estadísticas (descuenta lo que te deben en gastos compartidos)
+// Limpia etiquetas internas ([Cuota X/Y], [Puntual], [Mi parte...]) para mostrar prolijo en pantalla
+function cleanDisplayDescription(desc = "") {
+  return desc
+    .replace(/\[Mi parte:\s*\$\d+(?:\.\d+)?\s*\|\s*Me deben:\s*\$\d+(?:\.\d+)?(?:\s*\([^)]+\))?\]/gi, "")
+    .replace(/\[Cuota\s*\d+\s*\/\s*\d+\]/gi, "")
+    .replace(/\[Puntual\]/gi, "")
+    .trim();
+}
+
 const getEffectiveExpense = tx => {
   const split = parseSplitInfo(tx);
   if (split) return split.myShare;
@@ -354,7 +418,7 @@ function BankBadge({ id, size=40 }) {
 }
 
 /* ════════════════════════════════════════════════════════════
-   BANKS PAGE — página completa de gestión de bancos
+   BANKS PAGE
 ════════════════════════════════════════════════════════════ */
 function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
   const [local, setLocal]   = useState([...connectedIds]);
@@ -785,11 +849,14 @@ function AppContent({ session, onLogout }) {
 
   const [tab, setTab]                       = useState("dashboard");
   const [showModal, setShowModal]           = useState(false);
+  const [editingTxId, setEditingTxId]       = useState(null); // ID del movimiento que se está editando
+  const [savingTx, setSavingTx]             = useState(false);
   const [showLogout, setShowLogout]         = useState(false);
   const [showBanks, setShowBanks]           = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
-  const [settleModalTx, setSettleModalTx]   = useState(null); // Modal para cobrar deuda compartida
+  const [settleModalTx, setSettleModalTx]   = useState(null);
   const [settledIds, setSettledIds]         = useState(() => loadSettled());
+  const [fixedOverrides, setFixedOverrides] = useState(() => loadFixedOverrides());
   const [apiDone, setApiDone]               = useState(false);
   const [syncing, setSyncing]               = useState(false);
   const [syncStep, setSyncStep]             = useState(0);
@@ -826,23 +893,26 @@ function AppContent({ session, onLogout }) {
     }
   };
 
-  /* MEJORA 2: Categoría inicial vacía ("") para obligar a elegir */
+  /* Formulario inicial (creación o edición) */
   const getInitialForm = useCallback((mode = "expense") => {
     const firstDigital = connectedIds.find(id => id !== "efectivo") || "lemoncash";
     return {
       type: mode,               // "expense" | "income" | "investment" | "transfer"
       amount: "",
-      category: mode === "transfer" ? "Transferencia" : "", // Vacío por defecto salvo en transferencia
+      category: mode === "transfer" ? "Transferencia" : "",
       description: "",
       date: new Date().toISOString().split("T")[0],
       source: "digital",
       wallet: firstDigital,
       fromWallet: "efectivo",
       toWallet: firstDigital,
+      // Modo de gasto: "one-off" (Puntual), "fixed" (Fijo mensual), "installments" (En cuotas)
+      expenseMode: "one-off",
+      currentInst: "1",
+      totalInst: "3",
       recurring: false,
       autoRecurringDetected: false,
       dueDay: "",
-      // MEJORA 4: Campos de "Dividir cuenta / Me deben"
       isSplit: false,
       myShare: "",
       splitWith: "",
@@ -851,17 +921,72 @@ function AppContent({ session, onLogout }) {
 
   const [form, setForm] = useState(() => getInitialForm("expense"));
 
-  /* ── Computed (Excluyendo Transferencias Internas e Inversiones de los Gastos Operativos) ── */
+  /* Abrir modal para EDITAR un movimiento existente */
+  const openEditModal = tx => {
+    const isInv = isInvestmentTx(tx);
+    const split = parseSplitInfo(tx);
+    const inst  = parseInstallmentInfo(tx, fixedOverrides);
+    const isFix = isEffectiveFixedTx(tx, fixedOverrides);
+    const isCash = tx.source === "cash" || tx.wallet === "manual";
+    const firstDigital = connectedIds.find(id => id !== "efectivo") || "lemoncash";
+
+    let expenseMode = "one-off";
+    if (inst) expenseMode = "installments";
+    else if (isFix) expenseMode = "fixed";
+
+    let cleanDesc = cleanDisplayDescription(tx.description || "");
+    if (isInv) {
+      cleanDesc = cleanDesc.replace(/^\[inversi[oó]n\]\s*/i, "");
+    }
+
+    setEditingTxId(tx.id);
+    setForm({
+      type: isInv ? "investment" : tx.type,
+      amount: String(tx.amount || ""),
+      category: tx.category || "",
+      description: cleanDesc,
+      date: tx.date || new Date().toISOString().split("T")[0],
+      source: isCash ? "cash" : "digital",
+      wallet: isCash ? "manual" : (tx.wallet || firstDigital),
+      fromWallet: "efectivo",
+      toWallet: firstDigital,
+      expenseMode,
+      currentInst: inst ? String(inst.current) : "1",
+      totalInst:   inst ? String(inst.total)   : "3",
+      recurring: expenseMode !== "one-off",
+      autoRecurringDetected: false,
+      dueDay: tx.dueDay ? String(tx.dueDay) : "",
+      isSplit: !!split,
+      myShare: split ? String(split.myShare) : "",
+      splitWith: split && split.debtors !== "Amigos / Terceros" ? split.debtors : "",
+    });
+    setShowModal(true);
+  };
+
+  /* Quitar rápidamente la marca de "Fijo" desde el Dashboard sin borrar el gasto */
+  const removeFixedMark = async tx => {
+    const groupKey = getCommitmentGroupKey(tx);
+    // Desmarca tanto este registro como otros equivalentes del mismo grupo si existieran
+    const nextOverrides = { ...fixedOverrides };
+    txs.forEach(item => {
+      if (item.id === tx.id || getCommitmentGroupKey(item) === groupKey) {
+        nextOverrides[item.id] = { mode: "one-off" };
+      }
+    });
+    setFixedOverrides(nextOverrides);
+    saveFixedOverrides(nextOverrides);
+    showToast(`"${cleanDisplayDescription(tx.description)}" quitado de Compromisos Fijos ✓`);
+  };
+
+  /* ── Computed ── */
   const realIncomeTxs  = txs.filter(t => t.type === "income" && !isInternalTransfer(t));
   const realExpenseTxs = txs.filter(t => t.type === "expense" && !isInternalTransfer(t) && !isInvestmentTx(t));
   const investmentTxs  = txs.filter(t => isInvestmentTx(t));
 
-  const income      = realIncomeTxs.reduce((s,t) => s + t.amount, 0);
-  // En gastos operativos usamos getEffectiveExpense (si fue compartido, toma tu parte real)
-  const expenses    = realExpenseTxs.reduce((s,t) => s + getEffectiveExpense(t), 0);
-  const invested    = investmentTxs.reduce((s,t) => s + t.amount, 0);
+  const income   = realIncomeTxs.reduce((s,t) => s + t.amount, 0);
+  const expenses = realExpenseTxs.reduce((s,t) => s + getEffectiveExpense(t), 0);
+  const invested = investmentTxs.reduce((s,t) => s + t.amount, 0);
 
-  // El Saldo Total disponible en billeteras sí contempla todas las entradas y salidas reales de caja
   const walletBalance = useCallback(id => {
     if (id === "efectivo") {
       const wt = txs.filter(t => t.wallet==="manual" || t.source==="cash");
@@ -875,12 +1000,10 @@ function AppContent({ session, onLogout }) {
 
   const balance = connectedIds.reduce((s, id) => s + walletBalance(id), 0);
 
-  // Tasa de ahorro + inversión real sobre ingresos reales
   const totalSavedOrInvested = Math.max(0, income - expenses);
   const savingsRate = income > 0 ? Math.min(100, Math.max(0, Math.round((totalSavedOrInvested / income) * 100))) : 0;
   const investmentRate = income > 0 ? Math.min(100, Math.round((invested / income) * 100)) : 0;
 
-  // Slot machine animated values for the hero
   const slotBalance  = useSlotMachine(balance);
   const slotIncome   = useSlotMachine(income);
   const slotExpenses = useSlotMachine(expenses);
@@ -900,7 +1023,6 @@ function AppContent({ session, onLogout }) {
     </span>
   );
 
-  // Gráficos por categoría (solo Gastos Reales Operativos, sin transferencias ni inversiones)
   const byCat = EXPENSE_CATS
     .map(cat => ({
       name: cat,
@@ -910,7 +1032,6 @@ function AppContent({ session, onLogout }) {
     .filter(d => d.value > 0)
     .sort((a,b) => b.value - a.value);
 
-  // Totales para el donut — ordenados de mayor a menor (sin transferencias internas)
   const walletTotals = connectedIds.map(id => {
     const bank  = getBank(id);
     const value = realExpenseTxs
@@ -920,14 +1041,25 @@ function AppContent({ session, onLogout }) {
   }).filter(d => d.value > 0).sort((a,b) => b.value - a.value);
   const walletTotal = walletTotals.reduce((s,d)=>s+d.value,0);
 
-  // MEJORA 3: Gastos fijos (combina los marcados manualmente + los auto-detectados como Calistenia, Cuotas, HBO, Nutricionista)
-  const recurringExpenses = realExpenseTxs.filter(t => isAutoFixedTx(t));
-  const uniqueRecurring = Array.from(
-    new Map(recurringExpenses.map(t => [t.description.trim().toLowerCase(), t])).values()
-  ).sort((a,b) => (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
+  // Compromisos Fijos del Mes:
+  // 1) Filtra los que están activos hoy (excluyendo los quitados manualmente o cuotas ya vencidas)
+  // 2) Ordena del más reciente al más viejo para quedarse siempre con el último precio vigente de cada grupo (ej: último precio de Calistenia)
+  const recurringExpenses = realExpenseTxs
+    .filter(t => isEffectiveFixedTx(t, fixedOverrides))
+    .sort((a,b) => b.date.localeCompare(a.date));
+
+  const uniqueRecurringMap = new Map();
+  recurringExpenses.forEach(tx => {
+    const key = getCommitmentGroupKey(tx);
+    if (!uniqueRecurringMap.has(key)) {
+      uniqueRecurringMap.set(key, tx);
+    }
+  });
+  const uniqueRecurring = Array.from(uniqueRecurringMap.values())
+    .sort((a,b) => (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
   const monthlyCommitted = uniqueRecurring.reduce((s,t) => s + getEffectiveExpense(t), 0);
 
-  // MEJORA 4: Cuentas divididas / "Me deben" pendientes de cobro
+  // Cuentas divididas pendientes
   const pendingSplits = txs
     .map(tx => {
       const sp = parseSplitInfo(tx);
@@ -937,11 +1069,9 @@ function AppContent({ session, onLogout }) {
     .filter(Boolean);
   const totalOwedToMe = pendingSplits.reduce((s, item) => s + item.owed, 0);
 
-  // Today's day-of-month for due date detection
   const todayDay = new Date().getDate();
   const isDueSoon = d => d && (Number(d) - todayDay) >= 0 && (Number(d) - todayDay) <= 7;
 
-  // Monthly evolution — last 6 months (limpio de transferencias internas)
   const monthlyData = (() => {
     const result = [];
     for (let i=5; i>=0; i--) {
@@ -957,12 +1087,11 @@ function AppContent({ session, onLogout }) {
     return result;
   })();
 
-  // Unique categories with transactions
   const availableCats = ["all",...Array.from(new Set(txs.map(t=>t.category).filter(Boolean))).sort()];
 
   const filtered = txs.filter(t=>{
     const mt = filterType==="all" ? true
-             : filterType==="recurring" ? isAutoFixedTx(t)
+             : filterType==="recurring" ? isEffectiveFixedTx(t, fixedOverrides)
              : filterType==="investment" ? isInvestmentTx(t)
              : filterType==="transfer" ? isInternalTransfer(t)
              : filterType==="split" ? !!parseSplitInfo(t)
@@ -977,31 +1106,42 @@ function AppContent({ session, onLogout }) {
   /* ── Actions ── */
   const showToast = (msg,ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),3000); };
 
-  // Handler de descripción con auto-detección de Gasto Fijo (Mejora 3)
+  // Auto-detección al escribir descripción (solo cuando se crea un movimiento nuevo)
   const handleDescriptionChange = val => {
+    if (editingTxId) {
+      setForm(f => ({ ...f, description: val }));
+      return;
+    }
     const lower = val.toLowerCase();
+    const isCuotaText = /cuotas?/i.test(lower);
     const matchedFixed = FIXED_KEYWORDS.some(kw => {
       const r = new RegExp(`(^|\\s|[^a-záéíóúñ])${kw}($|\\s|[^a-záéíóúñ])`, "i");
       return r.test(lower);
     });
-    setForm(f => ({
-      ...f,
-      description: val,
-      recurring: (f.type === "expense" && matchedFixed) ? true : f.recurring,
-      autoRecurringDetected: (f.type === "expense" && matchedFixed),
-    }));
+    setForm(f => {
+      if (f.type !== "expense") return { ...f, description: val };
+      if (isCuotaText) {
+        return { ...f, description: val, expenseMode: "installments", recurring: true, autoRecurringDetected: true };
+      }
+      if (matchedFixed && f.expenseMode === "one-off") {
+        return { ...f, description: val, expenseMode: "fixed", recurring: true, autoRecurringDetected: true };
+      }
+      return { ...f, description: val };
+    });
   };
 
-  const addTx = async () => {
+  /* Guardar nuevo movimiento O Guardar edición de movimiento existente */
+  const saveOrUpdateTx = async () => {
     const totalAmt = parseFloat(form.amount);
-    if (!totalAmt || totalAmt <= 0) return;
+    if (!totalAmt || totalAmt <= 0 || savingTx) return;
 
-    // ── CASO A: TRANSFERENCIA ENTRE BILLETERAS (Mejora 1) ──
+    // ── CASO A: TRANSFERENCIA ENTRE BILLETERAS ──
     if (form.type === "transfer") {
       if (form.fromWallet === form.toWallet) {
         showToast("Elegí dos billeteras distintas", false);
         return;
       }
+      setSavingTx(true);
       const fromBank = getBank(form.fromWallet);
       const toBank   = getBank(form.toWallet);
       const note     = form.description.trim() ? ` (${form.description.trim()})` : "";
@@ -1045,24 +1185,36 @@ function AppContent({ session, onLogout }) {
         const txIn  = { ...payloadIn,  id: resIn.transaction.id };
         setTxs(p => [txIn, txOut, ...p]);
         setShowModal(false);
+        setEditingTxId(null);
         setForm(getInitialForm("expense"));
         showToast("Transferencia entre billeteras registrada ✓");
       } catch(e) {
         showToast(e.message || "Error al transferir", false);
+      } finally {
+        setSavingTx(false);
       }
       return;
     }
 
-    // Validación obligatoria de descripción y categoría (Mejora 2)
     if (!form.description.trim() || !form.category) return;
 
+    setSavingTx(true);
     const rw = form.source === "cash" ? "manual" : form.wallet;
 
-    // Armado de descripción para Inversión o Gasto Compartido (Mejoras 1 y 4)
-    let finalDesc = form.description.trim();
+    let finalDesc = cleanDisplayDescription(form.description.trim());
     if (form.type === "investment" && !finalDesc.toLowerCase().startsWith("[inversión]")) {
       finalDesc = `[Inversión] ${finalDesc}`;
-    } else if (form.type === "expense" && form.isSplit) {
+    }
+
+    // Si es gasto en cuotas, agrega etiqueta [Cuota X/Y]
+    if (form.type === "expense" && form.expenseMode === "installments") {
+      const cInst = Math.max(1, parseInt(form.currentInst, 10) || 1);
+      const tInst = Math.max(cInst, parseInt(form.totalInst, 10) || 3);
+      finalDesc = `${finalDesc} [Cuota ${cInst}/${tInst}]`;
+    }
+
+    // Si es gasto compartido ("Dividir cuenta / Me deben")
+    if (form.type === "expense" && form.isSplit) {
       const myShareNum = parseFloat(form.myShare) || 0;
       const owedNum    = Math.max(0, totalAmt - myShareNum);
       if (owedNum > 0) {
@@ -1071,8 +1223,8 @@ function AppContent({ session, onLogout }) {
       }
     }
 
-    // Para mantener 100% compatibilidad con el backend, "investment" se guarda como "expense" con prefijo y categoría de inversión
-    const backendType = form.type === "investment" ? "expense" : form.type;
+    const isRecurringBool = form.type === "expense" && (form.expenseMode === "fixed" || form.expenseMode === "installments");
+    const backendType     = form.type === "investment" ? "expense" : form.type;
 
     const payload = {
       type:        backendType,
@@ -1083,28 +1235,56 @@ function AppContent({ session, onLogout }) {
       source:      form.source,
       wallet:      rw,
       wallet_name: rw,
-      recurring:   form.type === "expense" ? !!form.recurring : false,
-      dueDay:      (form.type === "expense" && form.recurring) ? form.dueDay : "",
+      recurring:   isRecurringBool,
+      dueDay:      isRecurringBool ? form.dueDay : "",
     };
 
     try {
-      const data = await txApi.create(payload);
-      const newTx = {
-        ...payload,
-        id:     data.transaction.id,
-        wallet: rw,
-        date:   form.date,
-      };
-      setTxs(p => [newTx, ...p]);
+      let savedId = editingTxId;
+
+      if (editingTxId) {
+        // Si txApi tiene método update lo usa; si no, crea el registro actualizado y elimina el viejo
+        if (typeof txApi.update === "function") {
+          const res = await txApi.update(editingTxId, payload);
+          savedId = res?.transaction?.id || editingTxId;
+        } else {
+          const data = await txApi.create(payload);
+          savedId = data.transaction.id;
+          await txApi.delete(editingTxId);
+        }
+        const updatedTx = { ...payload, id: savedId, wallet: rw, date: form.date };
+        setTxs(p => p.map(t => t.id === editingTxId ? updatedTx : t));
+      } else {
+        const data = await txApi.create(payload);
+        savedId = data.transaction.id;
+        const newTx = { ...payload, id: savedId, wallet: rw, date: form.date };
+        setTxs(p => [newTx, ...p]);
+      }
+
+      // Guardamos la preferencia explícita de Fijo / Puntual / Cuotas en localStorage
+      if (form.type === "expense") {
+        const nextOv = { ...fixedOverrides };
+        if (editingTxId && editingTxId !== savedId) delete nextOv[editingTxId];
+        nextOv[savedId] = {
+          mode: form.expenseMode,
+          currentInst: parseInt(form.currentInst, 10) || 1,
+          totalInst:   parseInt(form.totalInst, 10) || 3,
+        };
+        setFixedOverrides(nextOv);
+        saveFixedOverrides(nextOv);
+      }
+
       setShowModal(false);
+      setEditingTxId(null);
       setForm(getInitialForm("expense"));
-      showToast(form.type === "investment" ? "Inversión registrada ✓" : "Movimiento guardado ✓");
+      showToast(editingTxId ? "Movimiento actualizado ✓" : "Movimiento guardado ✓");
     } catch(e) {
       showToast(e.message || "Error al guardar", false);
+    } finally {
+      setSavingTx(false);
     }
   };
 
-  // Saldar una deuda de "Me deben" creando el ingreso de reintegro o marcándola cobrada
   const handleSettleSplit = async (item, targetWalletId) => {
     const rw = targetWalletId === "efectivo" ? "manual" : targetWalletId;
     const src = targetWalletId === "efectivo" ? "cash" : "digital";
@@ -1179,7 +1359,8 @@ function AppContent({ session, onLogout }) {
     .tab-btn:hover{color:#94A3B8;}
     .tab-active{background:rgba(99,102,241,.15)!important;color:#818CF8!important;border-color:rgba(99,102,241,.3)!important;}
     .tx-wrap:hover .tx-del-btn{opacity:1;}
-    .tx-del-btn{opacity:0;transition:opacity .2s;}
+    .tx-del-btn{opacity:.45;transition:opacity .2s;}
+    .tx-del-btn:hover{opacity:1!important;}
     .tx-row{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #1E293B;background:#0F172A;}
     .tx-row:last-child{border-bottom:none;}
     .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;}
@@ -1315,9 +1496,8 @@ function AppContent({ session, onLogout }) {
           </span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {/* Acceso rápido a Transferir entre billeteras */}
           <button
-            onClick={() => { setForm(getInitialForm("transfer")); setShowModal(true); }}
+            onClick={() => { setEditingTxId(null); setForm(getInitialForm("transfer")); setShowModal(true); }}
             title="Transferir entre billeteras"
             style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,
               background:"rgba(56,189,248,.12)",border:"1px solid rgba(56,189,248,.28)",
@@ -1385,7 +1565,7 @@ function AppContent({ session, onLogout }) {
           <div className="db-grid">
             {/* LEFT */}
             <div className="col">
-              {/* Hero with count-up */}
+              {/* Hero */}
               <div className="grad-bal" style={{borderRadius:20,padding:26,position:"relative",overflow:"hidden"}}>
                 <div style={{position:"absolute",top:-48,right:-48,width:170,height:170,
                   background:"radial-gradient(circle,rgba(255,255,255,.1),transparent)",borderRadius:"50%"}}/>
@@ -1415,13 +1595,13 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Wallet balances + Botón Transferir */}
+              {/* Wallet balances */}
               <div className="card">
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
                   <p style={{fontSize:13,fontWeight:700}}>Saldo por Billetera</p>
                   <div style={{display:"flex",gap:10,alignItems:"center"}}>
                     <button
-                      onClick={() => { setForm(getInitialForm("transfer")); setShowModal(true); }}
+                      onClick={() => { setEditingTxId(null); setForm(getInitialForm("transfer")); setShowModal(true); }}
                       style={{fontSize:11,color:"#38BDF8",background:"rgba(56,189,248,.1)",
                         border:"1px solid rgba(56,189,248,.25)",borderRadius:8,padding:"4px 9px",
                         cursor:"pointer",fontFamily:"inherit",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
@@ -1467,7 +1647,7 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* MEJORA 4: Tarjeta "Me deben / Cuentas divididas" */}
+              {/* Me deben / Gastos compartidos */}
               <div className="card" style={{borderColor: totalOwedToMe > 0 ? "rgba(56,189,248,.3)" : "#1E293B"}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1488,7 +1668,7 @@ function AppContent({ session, onLogout }) {
 
                 {pendingSplits.length === 0 ? (
                   <div style={{textAlign:"center",padding:"10px 0",color:"#475569",fontSize:12,lineHeight:1.6}}>
-                    No tenés cobros pendientes. Al cargar una salida grupal, activá{" "}
+                    No tenés cobros pendientes. Al cargar o editar una salida grupal, activá{" "}
                     <span style={{color:"#38BDF8",fontWeight:600}}>"Dividir cuenta / Me deben"</span>.
                   </div>
                 ) : (
@@ -1530,7 +1710,7 @@ function AppContent({ session, onLogout }) {
 
             {/* RIGHT */}
             <div className="col">
-              {/* MEJORA 1: Tasa de Ahorro + Capital Invertido */}
+              {/* Tasa de Ahorro + Capital Invertido */}
               <div className="card">
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
                   <div>
@@ -1566,13 +1746,13 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* MEJORA 3: Compromisos del mes (con auto-detección de Calistenia, Cuotas, HBO, Nutricionista) */}
+              {/* Compromisos Fijos del Mes (con edición directa, baja de marca fijo y control de cuotas) */}
               <div className="card">
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
                   <div>
                     <p style={{fontSize:13,fontWeight:700}}>Compromisos Fijos del Mes</p>
                     <p style={{fontSize:11,color:"#64748B",marginTop:3}}>
-                      Detecta automáticamente Calistenia, Cuotas, HBO, Nutricionista, etc.
+                      Agrupa duplicados y descuenta cuotas vencidas · podés editar (✏️) o quitar de fijos (✕)
                     </p>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
@@ -1582,15 +1762,15 @@ function AppContent({ session, onLogout }) {
                 </div>
                 {uniqueRecurring.length===0 ? (
                   <div style={{textAlign:"center",padding:"14px 0",color:"#475569",fontSize:12,lineHeight:1.6}}>
-                    Sin gastos fijos. Se marcan solos al cargar{" "}
-                    <span style={{color:"#FBBF24"}}>Calistenia, Cuotas, HBO…</span>
+                    Sin gastos fijos activos este mes.
                   </div>
                 ) : (
                   <>
                     <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:12}}>
-                      {uniqueRecurring.slice(0,6).map(tx=>{
+                      {uniqueRecurring.slice(0,8).map(tx=>{
                         const m=CAT_META[tx.category]||CAT_META["Otros"], I=m.Icon;
                         const soon = isDueSoon(tx.dueDay);
+                        const inst = parseInstallmentInfo(tx, fixedOverrides);
                         return (
                           <div key={tx.id} style={{display:"flex",alignItems:"center",gap:10,
                               background: soon?"rgba(251,191,36,.06)":"#1E293B",
@@ -1603,18 +1783,48 @@ function AppContent({ session, onLogout }) {
                             <div style={{flex:1,minWidth:0}}>
                               <div style={{display:"flex",alignItems:"center",gap:6}}>
                                 <p style={{fontSize:12,fontWeight:600,color:"#CBD5E1",overflow:"hidden",
-                                    textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.description}</p>
+                                    textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                  {cleanDisplayDescription(tx.description)}
+                                </p>
                                 {soon && <AlertTriangle size={11} color="#FBBF24"/>}
                               </div>
                               <p style={{fontSize:10,color:"#475569",marginTop:1}}>
-                                {tx.category}
+                                {tx.category} · {fDate(tx.date)}
                                 {tx.dueDay ? <span style={{color:soon?"#FBBF24":"#64748B"}}> · vence día {tx.dueDay}</span> : ""}
                               </p>
                             </div>
-                            <div style={{flexShrink:0,textAlign:"right"}}>
+                            <div style={{flexShrink:0,textAlign:"right",marginRight:4}}>
                               <p style={{fontSize:13,fontWeight:700,color:"#FBBF24"}}>-{fARS(getEffectiveExpense(tx))}</p>
-                              <p style={{fontSize:9,fontWeight:600,color:"#FBBF24",background:"rgba(251,191,36,.12)",
-                                  borderRadius:5,padding:"1px 5px",marginTop:2}}>📅 fijo</p>
+                              {inst ? (
+                                <p style={{fontSize:9,fontWeight:700,color:"#38BDF8",background:"rgba(56,189,248,.12)",
+                                    borderRadius:5,padding:"1px 6px",marginTop:2,display:"inline-block"}}>
+                                  💳 Cuota {inst.current}/{inst.total}
+                                </p>
+                              ) : (
+                                <p style={{fontSize:9,fontWeight:600,color:"#FBBF24",background:"rgba(251,191,36,.12)",
+                                    borderRadius:5,padding:"1px 5px",marginTop:2,display:"inline-block"}}>
+                                  📅 fijo
+                                </p>
+                              )}
+                            </div>
+                            {/* Botones de acción directa: Editar gasto / Quitar solo marca de fijo */}
+                            <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                              <button
+                                onClick={() => openEditModal(tx)}
+                                title="Editar gasto (categoría, cuotas, monto…)"
+                                style={{width:26,height:26,borderRadius:7,background:"rgba(99,102,241,.14)",
+                                  border:"1px solid rgba(99,102,241,.3)",color:"#818CF8",cursor:"pointer",
+                                  display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                <Edit3 size={12}/>
+                              </button>
+                              <button
+                                onClick={() => removeFixedMark(tx)}
+                                title="Quitar de gastos fijos (mantiene el gasto en tu historial)"
+                                style={{width:26,height:26,borderRadius:7,background:"rgba(244,114,182,.12)",
+                                  border:"1px solid rgba(244,114,182,.25)",color:"#F472B6",cursor:"pointer",
+                                  display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                <CalendarOff size={12}/>
+                              </button>
                             </div>
                           </div>
                         );
@@ -1663,7 +1873,7 @@ function AppContent({ session, onLogout }) {
                           <TxIcon tx={tx}/>
                           <div style={{flex:1,minWidth:0}}>
                             <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              {split ? split.cleanDesc : tx.description}
+                              {split ? split.cleanDesc : cleanDisplayDescription(tx.description)}
                             </p>
                             <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
                               {isTrans ? "Transferencia interna" : isInv ? "Inversión / Ahorro" : tx.category} · {fDate(tx.date)}
@@ -1673,6 +1883,14 @@ function AppContent({ session, onLogout }) {
                               color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
                             {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
                           </span>
+                          {!isTrans && (
+                            <button
+                              onClick={() => openEditModal(tx)}
+                              title="Editar movimiento"
+                              style={{background:"none",border:"none",cursor:"pointer",color:"#64748B",padding:4,display:"flex"}}>
+                              <Edit3 size={13}/>
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -1807,7 +2025,6 @@ function AppContent({ session, onLogout }) {
                     <X size={13}/>
                   </button>}
                 </div>
-                {/* Botón exportar CSV mejorado (incluye Tipo real, Fijo auto-detectado y Parte Propia) */}
                 <button onClick={()=>{
                   const header = ["Fecha","Tipo","Descripción","Categoría","Monto Caja","Consumo Real","Billetera","Fijo"];
                   const rows = filtered.map(tx => {
@@ -1824,7 +2041,7 @@ function AppContent({ session, onLogout }) {
                       signedAmt,
                       realCons,
                       (tx.wallet==="manual"||tx.source==="cash")?"Efectivo":(ARG_BANKS.find(b=>b.id===tx.wallet)?.name||tx.wallet||"Efectivo"),
-                      isAutoFixedTx(tx) ? "Sí" : "No",
+                      isEffectiveFixedTx(tx, fixedOverrides) ? "Sí" : "No",
                     ];
                   });
                   const csv = [header,...rows].map(r=>r.join(",")).join("\n");
@@ -1843,7 +2060,6 @@ function AppContent({ session, onLogout }) {
                   Exportar CSV
                 </button>
               </div>
-              {/* Type filters ampliados */}
               <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",paddingBottom:2}}>
                 {[
                   ["all","Todos","#818CF8"],
@@ -1863,7 +2079,6 @@ function AppContent({ session, onLogout }) {
                   </button>
                 ))}
               </div>
-              {/* Category chips */}
               {availableCats.length>2 && (
                 <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4}}>
                   {availableCats.map(cat=>{
@@ -1900,7 +2115,6 @@ function AppContent({ session, onLogout }) {
               const sortedDates = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
               return sortedDates.map(date=>{
                 const dayTxs = groups[date];
-                // Balance diario sin distorsión por pases internos
                 const dayNet = dayTxs.reduce((s,t) => {
                   if (isInternalTransfer(t)) return s;
                   return t.type==="income" ? s + t.amount : s - t.amount;
@@ -1927,7 +2141,8 @@ function AppContent({ session, onLogout }) {
                         const src     = sourceLabel(tx);
                         const isTrans = isInternalTransfer(tx);
                         const isInv   = isInvestmentTx(tx);
-                        const isFixed = isAutoFixedTx(tx);
+                        const isFixed = isEffectiveFixedTx(tx, fixedOverrides);
+                        const inst    = parseInstallmentInfo(tx, fixedOverrides);
                         const split   = parseSplitInfo(tx);
                         return (
                           <div key={tx.id} className="tx-wrap" style={{borderBottom:"1px solid #1E293B"}}>
@@ -1937,7 +2152,7 @@ function AppContent({ session, onLogout }) {
                                 <div style={{flex:1,minWidth:0}}>
                                   <p style={{fontSize:13,fontWeight:600,overflow:"hidden",
                                       textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                    {split ? split.cleanDesc : tx.description}
+                                    {split ? split.cleanDesc : cleanDisplayDescription(tx.description)}
                                   </p>
                                   <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
                                     <span style={{fontSize:11,color:"#64748B"}}>{tx.category}</span>
@@ -1961,13 +2176,20 @@ function AppContent({ session, onLogout }) {
                                         📈 inversión
                                       </span>
                                     )}
-                                    {isFixed && (
+                                    {inst ? (
+                                      <span style={{fontSize:10,fontWeight:700,color: isFixed ? "#38BDF8" : "#64748B",
+                                          background: isFixed ? "rgba(56,189,248,.12)" : "rgba(100,116,139,.12)",
+                                          borderRadius:6,padding:"1px 6px",
+                                          border:`1px solid ${isFixed ? "rgba(56,189,248,.28)" : "rgba(100,116,139,.25)"}`}}>
+                                        💳 Cuota {inst.current}/{inst.total}{!isFixed ? " (finalizada)" : ""}
+                                      </span>
+                                    ) : isFixed ? (
                                       <span style={{fontSize:10,fontWeight:600,color:"#FBBF24",
                                           background:"rgba(251,191,36,.1)",borderRadius:6,padding:"1px 6px",
                                           border:"1px solid rgba(251,191,36,.2)"}}>
                                         📅 fijo{tx.dueDay?` · día ${tx.dueDay}`:""}
                                       </span>
-                                    )}
+                                    ) : null}
                                     {split && (
                                       <span style={{fontSize:10,fontWeight:700,color:"#38BDF8",
                                           background:"rgba(56,189,248,.12)",borderRadius:6,padding:"1px 6px",
@@ -1977,14 +2199,25 @@ function AppContent({ session, onLogout }) {
                                     )}
                                   </div>
                                 </div>
-                                <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                                <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
                                   <span style={{fontSize:13,fontWeight:700,
                                       color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
                                     {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
                                   </span>
+                                  {/* Botón Editar */}
+                                  {!isTrans && (
+                                    <button className="tx-del-btn" onClick={()=>openEditModal(tx)}
+                                      title="Editar movimiento"
+                                      style={{background:"none",border:"none",cursor:"pointer",
+                                          color:"#818CF8",padding:"4px",borderRadius:6,display:"flex"}}>
+                                      <Edit3 size={13}/>
+                                    </button>
+                                  )}
+                                  {/* Botón Eliminar */}
                                   <button className="tx-del-btn" onClick={()=>confirmDelete(tx.id)}
+                                    title="Eliminar movimiento"
                                     style={{background:"none",border:"none",cursor:"pointer",
-                                        color:"#334155",padding:"4px",borderRadius:6,display:"flex"}}>
+                                        color:"#F472B6",padding:"4px",borderRadius:6,display:"flex"}}>
                                     <Trash2 size={13}/>
                                   </button>
                                 </div>
@@ -2061,7 +2294,7 @@ function AppContent({ session, onLogout }) {
       </main>
 
       {/* FAB */}
-      <button onClick={() => { setForm(getInitialForm("expense")); setShowModal(true); }} className="grad-fab"
+      <button onClick={() => { setEditingTxId(null); setForm(getInitialForm("expense")); setShowModal(true); }} className="grad-fab"
         style={{position:"fixed",bottom:24,right:20,width:56,height:56,borderRadius:16,
           border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
           zIndex:40,transition:"transform .15s"}}
@@ -2128,7 +2361,7 @@ function AppContent({ session, onLogout }) {
               </div>
               <h3 style={{fontSize:16,fontWeight:700,marginBottom:6}}>¿Eliminar movimiento?</h3>
               <p style={{fontSize:13,color:"#64748B",lineHeight:1.5}}>
-                Esta acción no se puede deshacer.
+                Esta acción borrará el registro completo. Si solo querés quitarlo de fijos, usá el botón ✏️ o ✕.
               </p>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -2185,32 +2418,35 @@ function AppContent({ session, onLogout }) {
         </div>
       )}
 
-      {/* ADD TX MODAL (CON LAS 4 MEJORAS INTEGRADAS) */}
+      {/* MODAL CREAR / EDITAR MOVIMIENTO */}
       {showModal && (
-        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setShowModal(false);}}>
+        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget){setShowModal(false);setEditingTxId(null);}}}>
           <div className="glass-hi fade-in"
             style={{width:"100%",maxWidth:540,borderRadius:22,padding:24,maxHeight:"92vh",overflowY:"auto"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
-              <h2 style={{fontSize:18,fontWeight:800,letterSpacing:"-.3px"}}>Nuevo Movimiento</h2>
-              <button onClick={()=>setShowModal(false)}
+              <h2 style={{fontSize:18,fontWeight:800,letterSpacing:"-.3px"}}>
+                {editingTxId ? "Editar Movimiento" : "Nuevo Movimiento"}
+              </h2>
+              <button onClick={()=>{setShowModal(false);setEditingTxId(null);}}
                 style={{width:32,height:32,borderRadius:9,background:"#1E293B",border:"none",cursor:"pointer",
                     display:"flex",alignItems:"center",justifyContent:"center"}}>
                 <X size={15} color="#94A3B8"/>
               </button>
             </div>
 
-            {/* MEJORA 1: 4 Tipos de Movimiento (Gasto / Ingreso / Inversión / Transferir) */}
+            {/* 4 Tipos de Movimiento */}
             <div className="pill" style={{marginBottom:18}}>
               {[
                 ["expense",    "Gasto",      "#DC2626", "#BE123C"],
                 ["income",     "Ingreso",    "#059669", "#047857"],
                 ["investment", "Inversión",  "#7C3AED", "#6D28D9"],
-                ["transfer",   "Transferir", "#0284C7", "#0369A1"],
+                ...(!editingTxId ? [["transfer", "Transferir", "#0284C7", "#0369A1"]] : []),
               ].map(([val,label,c1,c2])=>(
                 <button key={val} className="pill-o"
                   onClick={()=>setForm(f=>({
                     ...getInitialForm(val),
                     amount: f.amount,
+                    description: f.description,
                     date: f.date,
                   }))}
                   style={form.type===val?{background:`linear-gradient(135deg,${c1},${c2})`,color:"#fff"}:{}}>
@@ -2273,7 +2509,6 @@ function AppContent({ session, onLogout }) {
               </div>
             </div>
 
-            {/* ── UI EXCLUSIVA PARA TRANSFERENCIA ENTRE BILLETERAS (Mejora 1) ── */}
             {form.type === "transfer" ? (
               <>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
@@ -2318,7 +2553,7 @@ function AppContent({ session, onLogout }) {
               </>
             ) : (
               <>
-                {/* Description (con auto-detección de fijo mensual al escribir) */}
+                {/* Description */}
                 <div style={{marginBottom:14}}>
                   <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
                     DESCRIPCIÓN
@@ -2332,7 +2567,7 @@ function AppContent({ session, onLogout }) {
                     }/>
                 </div>
 
-                {/* MEJORA 2: Categoría SIN valor por defecto y con validación obligatoria */}
+                {/* Categoría obligatoria */}
                 <div style={{marginBottom:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                     <label style={{fontSize:11,color:"#64748B",fontWeight:600}}>CATEGORÍA *</label>
@@ -2345,11 +2580,7 @@ function AppContent({ session, onLogout }) {
                   <select
                     className="input-fc"
                     value={form.category}
-                    onChange={e => {
-                      const cat = e.target.value;
-                      // Si elige Servicios o Salud y contiene palabra fija, sugerir fijo
-                      setForm(f => ({ ...f, category: cat }));
-                    }}
+                    onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
                     style={{
                       borderColor: !form.category ? "rgba(251,191,36,.45)" : "#334155",
                       color: !form.category ? "#94A3B8" : "#F1F5F9",
@@ -2410,7 +2641,7 @@ function AppContent({ session, onLogout }) {
                           const bank = getBank(id); if(!bank) return null;
                           const wBal  = walletBalance(id);
                           const req   = parseFloat(form.amount)||0;
-                          const insuf = (form.type==="expense"||form.type==="investment")&&req>0&&wBal<req;
+                          const insuf = !editingTxId && (form.type==="expense"||form.type==="investment")&&req>0&&wBal<req;
                           const sel   = form.wallet===id;
                           return (
                             <button key={id} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:id})); }}
@@ -2437,7 +2668,7 @@ function AppContent({ session, onLogout }) {
                   </div>
                 )}
 
-                {/* MEJORA 4: Modo "Dividir cuenta / Me deben" (solo en Gastos) */}
+                {/* Dividir cuenta / Me deben */}
                 {form.type === "expense" && (
                   <div style={{marginBottom:14,padding:12,borderRadius:13,
                       background: form.isSplit ? "rgba(56,189,248,.08)" : "#1E293B",
@@ -2507,43 +2738,99 @@ function AppContent({ session, onLogout }) {
                   </div>
                 )}
 
-                {/* MEJORA 3: Recurring toggle con badge de auto-detectado */}
+                {/* 3 Modos de Gasto: Puntual / Fijo mensual / En cuotas (con límite de meses) */}
                 {form.type==="expense" && (
-                  <div style={{marginBottom: form.recurring ? 14 : 20}}>
+                  <div style={{marginBottom: form.expenseMode !== "one-off" ? 14 : 20}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                       <label style={{fontSize:11,color:"#64748B",fontWeight:600}}>
                         ¿QUÉ TIPO DE GASTO ES?
                       </label>
-                      {form.autoRecurringDetected && form.recurring && (
+                      {form.autoRecurringDetected && form.expenseMode !== "one-off" && (
                         <span style={{fontSize:10,color:"#FBBF24",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                          <Sparkles size={11}/> Auto-detectado como fijo
+                          <Sparkles size={11}/> Sugerido automáticamente
                         </span>
                       )}
                     </div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                      {[{val:false,label:"Puntual",sub:"Compra, café, salida…",icon:"🛒",color:"#818CF8"},
-                        {val:true, label:"Fijo mensual",sub:"Calistenia, cuotas, HBO…",icon:"📅",color:"#FBBF24"}].map(
-                        ({val,label,sub,icon,color})=>(
-                          <button key={String(val)}
-                            onClick={()=>setForm(f=>({...f,recurring:val,autoRecurringDetected:false,dueDay:val?f.dueDay:""}))}
-                            style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:4,
-                              padding:"11px 13px",borderRadius:13,border:"2px solid",cursor:"pointer",
-                              fontFamily:"inherit",transition:"all .2s",textAlign:"left",
-                              borderColor:form.recurring===val?color:"#1E293B",
-                              background:form.recurring===val?color+"12":"#1E293B"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <span style={{fontSize:14}}>{icon}</span>
-                              <span style={{fontSize:12,fontWeight:700,color:form.recurring===val?color:"#94A3B8"}}>{label}</span>
-                            </div>
-                            <span style={{fontSize:10,color:form.recurring===val?color+"BB":"#475569"}}>{sub}</span>
-                          </button>
-                        )
-                      )}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                      {[
+                        {val:"one-off",      label:"Puntual",      sub:"Compra única, café…", icon:"🛒", color:"#818CF8"},
+                        {val:"fixed",        label:"Fijo mensual", sub:"Calistenia, HBO…",    icon:"📅", color:"#FBBF24"},
+                        {val:"installments", label:"En cuotas",    sub:"Solo por X meses",    icon:"💳", color:"#38BDF8"},
+                      ].map(({val,label,sub,icon,color})=>(
+                        <button key={val}
+                          type="button"
+                          onClick={()=>setForm(f=>({
+                            ...f,
+                            expenseMode: val,
+                            recurring: val !== "one-off",
+                            autoRecurringDetected: false,
+                            dueDay: val !== "one-off" ? f.dueDay : "",
+                          }))}
+                          style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:4,
+                            padding:"10px 11px",borderRadius:13,border:"2px solid",cursor:"pointer",
+                            fontFamily:"inherit",transition:"all .2s",textAlign:"left",
+                            borderColor:form.expenseMode===val?color:"#1E293B",
+                            background:form.expenseMode===val?color+"14":"#1E293B"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:5}}>
+                            <span style={{fontSize:13}}>{icon}</span>
+                            <span style={{fontSize:11.5,fontWeight:700,color:form.expenseMode===val?color:"#94A3B8"}}>{label}</span>
+                          </div>
+                          <span style={{fontSize:9.5,color:form.expenseMode===val?color+"CC":"#475569",lineHeight:1.3}}>{sub}</span>
+                        </button>
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {form.type==="expense" && form.recurring && (
+                {/* Selector de Cuota Actual y Total de Cuotas (Ej: Cuota 2 de 3) */}
+                {form.type === "expense" && form.expenseMode === "installments" && (
+                  <div style={{marginBottom:14,padding:13,borderRadius:13,background:"rgba(56,189,248,.08)",
+                      border:"1px solid rgba(56,189,248,.3)",animation:"fu .2s ease-out both"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+                      <Layers size={14} color="#38BDF8"/>
+                      <span style={{fontSize:11,fontWeight:700,color:"#38BDF8"}}>
+                        DURACIÓN DE LAS CUOTAS (SE QUITA DE FIJOS AL TERMINAR)
+                      </span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                      <div>
+                        <label style={{fontSize:10,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:4}}>
+                          CUOTA QUE PAGÁS AHORA
+                        </label>
+                        <input
+                          type="number" min="1" max="60"
+                          className="input-fc"
+                          value={form.currentInst}
+                          onChange={e => setForm(f => ({ ...f, currentInst: e.target.value }))}
+                          placeholder="Ej: 2"
+                          style={{padding:"9px 12px",fontSize:13}}
+                        />
+                      </div>
+                      <div>
+                        <label style={{fontSize:10,color:"#94A3B8",fontWeight:600,display:"block",marginBottom:4}}>
+                          CANTIDAD TOTAL DE MESES
+                        </label>
+                        <input
+                          type="number" min="1" max="60"
+                          className="input-fc"
+                          value={form.totalInst}
+                          onChange={e => setForm(f => ({ ...f, totalInst: e.target.value }))}
+                          placeholder="Ej: 3"
+                          style={{padding:"9px 12px",fontSize:13}}
+                        />
+                      </div>
+                    </div>
+                    <p style={{fontSize:10.5,color:"#94A3B8",marginTop:8}}>
+                      ✨ Quedan{" "}
+                      <b style={{color:"#38BDF8"}}>
+                        {Math.max(0, (parseInt(form.totalInst,10)||1) - (parseInt(form.currentInst,10)||1))} meses
+                      </b>{" "}
+                      después de este pago. Cuando termine el plazo, saldrá solo de Compromisos Fijos sin borrar el gasto.
+                    </p>
+                  </div>
+                )}
+
+                {form.type==="expense" && form.expenseMode !== "one-off" && (
                   <div style={{marginBottom:20,animation:"fu .2s ease-out both"}}>
                     <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
                       ¿QUÉ DÍA DEL MES VENCE?{" "}
@@ -2566,14 +2853,15 @@ function AppContent({ session, onLogout }) {
               </>
             )}
 
-            {/* Submit con validaciones claras */}
-            <button className="btn-p" onClick={addTx}
+            {/* Submit */}
+            <button className="btn-p" onClick={saveOrUpdateTx}
               disabled={
+                savingTx ||
                 !form.amount ||
                 parseFloat(form.amount) <= 0 ||
                 (form.type === "transfer" && form.fromWallet === form.toWallet) ||
                 (form.type !== "transfer" && (!form.description.trim() || !form.category)) ||
-                ((form.type === "expense" || form.type === "investment") && form.source === "digital" &&
+                (!editingTxId && (form.type === "expense" || form.type === "investment") && form.source === "digital" &&
                  parseFloat(form.amount) > 0 && walletBalance(form.wallet) < parseFloat(form.amount))
               }
               style={{
@@ -2585,11 +2873,15 @@ function AppContent({ session, onLogout }) {
                   ? "linear-gradient(135deg,#7C3AED,#6D28D9)"
                   : "linear-gradient(135deg,#0284C7,#0369A1)"
               }}>
-              {(form.type === "expense" || form.type === "investment") && form.source === "digital" &&
-               parseFloat(form.amount) > 0 && walletBalance(form.wallet) < parseFloat(form.amount)
+              {savingTx
+                ? "Guardando cambios…"
+                : !editingTxId && (form.type === "expense" || form.type === "investment") && form.source === "digital" &&
+                  parseFloat(form.amount) > 0 && walletBalance(form.wallet) < parseFloat(form.amount)
                 ? "Saldo insuficiente en billetera"
                 : form.type !== "transfer" && !form.category
                 ? "Seleccioná una categoría para continuar"
+                : editingTxId
+                ? "Guardar Cambios"
                 : form.type === "transfer"
                 ? "Confirmar Transferencia"
                 : form.type === "investment"
