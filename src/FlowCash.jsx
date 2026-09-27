@@ -9,7 +9,7 @@ import {
   Briefcase, ArrowUpRight, ChevronRight, RefreshCw, CheckCircle,
   Search, Key, Info, BookOpen, Smartphone, Trash2, Shield,
   Banknote, CreditCard, LogOut, User, Mail, Lock, Eye, EyeOff,
-  AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff,
+  AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff, Download,
 } from "lucide-react";
 import { authApi, txApi, walletApi, mpApi } from './api.js';
 
@@ -1551,17 +1551,48 @@ function AppContent({ session, onLogout }) {
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             {/* Search + filters */}
             <div className="card" style={{padding:12}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",
-                  borderRadius:10,padding:"9px 12px",marginBottom:8}}>
-                <Search size={14} color="#475569"/>
-                <input value={query} onChange={e=>setQuery(e.target.value)}
-                  placeholder="Buscar por descripción o categoría…"
-                  style={{background:"none",border:"none",outline:"none",flex:1,fontSize:13,
-                    color:"#F1F5F9",fontFamily:"inherit"}}/>
-                {query&&<button onClick={()=>setQuery("")}
-                  style={{background:"none",border:"none",cursor:"pointer",color:"#475569",padding:0}}>
-                  <X size={13}/>
-                </button>}
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",
+                    borderRadius:10,padding:"9px 12px",flex:1}}>
+                  <Search size={14} color="#475569"/>
+                  <input value={query} onChange={e=>setQuery(e.target.value)}
+                    placeholder="Buscar por descripción o categoría…"
+                    style={{background:"none",border:"none",outline:"none",flex:1,fontSize:13,
+                      color:"#F1F5F9",fontFamily:"inherit"}}/>
+                  {query&&<button onClick={()=>setQuery("")}
+                    style={{background:"none",border:"none",cursor:"pointer",color:"#475569",padding:0}}>
+                    <X size={13}/>
+                  </button>}
+                </div>
+                {/* Botón exportar CSV */}
+                <button onClick={()=>{
+                  const header = ["Fecha","Tipo","Descripción","Categoría","Monto","Billetera","Fijo"];
+                  const rows = filtered.map(tx=>[
+                    tx.date,
+                    tx.type==="income"?"Ingreso":"Gasto",
+                    `"${(tx.description||"").replace(/"/g,'""')}"`,
+                    tx.category||"",
+                    tx.type==="income"?tx.amount:-tx.amount,
+                    tx.wallet==="manual"?"Efectivo":(ARG_BANKS.find(b=>b.id===tx.wallet)?.name||tx.wallet||"Efectivo"),
+                    tx.recurring?"Sí":"No",
+                  ]);
+                  const csv = [header,...rows].map(r=>r.join(",")).join("\n");
+                  const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href=url; a.download=`flowcash-registros-${new Date().toISOString().split("T")[0]}.csv`;
+                  a.click(); URL.revokeObjectURL(url);
+                }}
+                  title="Exportar a CSV"
+                  style={{display:"flex",alignItems:"center",gap:7,padding:"9px 14px",borderRadius:10,
+                    background:"rgba(99,102,241,.12)",border:"1px solid rgba(99,102,241,.25)",
+                    color:"#818CF8",cursor:"pointer",fontSize:12,fontWeight:600,
+                    fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0,transition:"all .2s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="rgba(99,102,241,.22)"}
+                  onMouseLeave={e=>e.currentTarget.style.background="rgba(99,102,241,.12)"}>
+                  <Download size={14}/>
+                  Exportar CSV
+                </button>
               </div>
               {/* Type filters */}
               <div style={{display:"flex",gap:5,marginBottom:8}}>
