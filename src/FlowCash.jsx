@@ -10,6 +10,7 @@ import {
   Search, Key, Info, BookOpen, Smartphone, Trash2, Shield,
   Banknote, CreditCard, LogOut, User, Mail, Lock, Eye, EyeOff,
   AlertCircle, UserPlus, LogIn, Calendar, AlertTriangle, WifiOff, Download,
+  ArrowLeftRight, PiggyBank, Users, Sparkles,
 } from "lucide-react";
 import { authApi, txApi, walletApi, mpApi } from './api.js';
 
@@ -22,21 +23,39 @@ const loadSession = () => JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'nul
 const saveSession = s  => sessionStorage.setItem(SESSION_KEY, JSON.stringify(s));
 const clearSession= () => { sessionStorage.removeItem(SESSION_KEY); authApi.logout(); };
 
+/* ─── Storage local para deudas saldadas ("Me deben") ───── */
+const SETTLED_KEY = 'fc_settled_splits_v1';
+const loadSettled = () => JSON.parse(localStorage.getItem(SETTLED_KEY) || '[]');
+const saveSettled = ids => localStorage.setItem(SETTLED_KEY, JSON.stringify(ids));
+
 /* ─── Constants ─────────────────────────────────────────── */
-const EXPENSE_CATS = ["Alimentación","Transporte","Entretenimiento","Salud","Ropa","Servicios","Otros"];
-const INCOME_CATS  = ["Sueldo","Freelance","Inversiones","Transferencia","Otros"];
+const EXPENSE_CATS    = ["Alimentación","Transporte","Entretenimiento","Salud","Ropa","Servicios","Otros"];
+const INCOME_CATS     = ["Sueldo","Freelance","Inversiones","Transferencia","Otros"];
+const INVESTMENT_CATS = ["Inversiones","Broker / Acciones","Cripto / USDT","Fondo Común / Staking","Ahorro"];
+
+/* Palabras clave que auto-activan "Fijo mensual" */
+const FIXED_KEYWORDS = [
+  "calistenia", "calis", "entrenamiento", "gimnasio", "gym",
+  "cuota", "cuotas", "hbo", "netflix", "spotify", "nutricionista",
+  "alquiler", "expensas", "internet", "wifi", "seguro", "prepaga"
+];
+
 const CAT_META = {
-  Alimentación:    { Icon: ShoppingCart, color: "#34D399" },
-  Transporte:      { Icon: Car,          color: "#60A5FA" },
-  Entretenimiento: { Icon: Coffee,       color: "#A78BFA" },
-  Salud:           { Icon: Heart,        color: "#F472B6" },
-  Ropa:            { Icon: Shirt,        color: "#FB923C" },
-  Servicios:       { Icon: Zap,          color: "#FBBF24" },
-  Otros:           { Icon: DollarSign,   color: "#94A3B8" },
-  Sueldo:          { Icon: Briefcase,    color: "#34D399" },
-  Freelance:       { Icon: Smartphone,   color: "#60A5FA" },
-  Inversiones:     { Icon: TrendingUp,   color: "#A78BFA" },
-  Transferencia:   { Icon: ArrowUpRight, color: "#FBBF24" },
+  Alimentación:            { Icon: ShoppingCart,   color: "#34D399" },
+  Transporte:              { Icon: Car,            color: "#60A5FA" },
+  Entretenimiento:         { Icon: Coffee,         color: "#A78BFA" },
+  Salud:                   { Icon: Heart,          color: "#F472B6" },
+  Ropa:                    { Icon: Shirt,          color: "#FB923C" },
+  Servicios:               { Icon: Zap,            color: "#FBBF24" },
+  Otros:                   { Icon: DollarSign,     color: "#94A3B8" },
+  Sueldo:                  { Icon: Briefcase,      color: "#34D399" },
+  Freelance:               { Icon: Smartphone,     color: "#60A5FA" },
+  Inversiones:             { Icon: PiggyBank,      color: "#A78BFA" },
+  "Broker / Acciones":     { Icon: TrendingUp,     color: "#818CF8" },
+  "Cripto / USDT":         { Icon: PiggyBank,      color: "#FBBF24" },
+  "Fondo Común / Staking": { Icon: TrendingUp,     color: "#34D399" },
+  Ahorro:                  { Icon: PiggyBank,      color: "#38BDF8" },
+  Transferencia:           { Icon: ArrowLeftRight, color: "#38BDF8" },
 };
 const WALLETS = {
   manual:      { label:"Efectivo",     color:"#34D399", Icon: Banknote   },
@@ -71,6 +90,7 @@ const ARG_BANKS = [
 const getBank = id => id === "efectivo"
   ? { id:"efectivo", name:"Efectivo", color:"#34D399", initials:"E", type:"Efectivo" }
   : ARG_BANKS.find(b => b.id === id);
+
 const MOCK_API = [
   { id:"mp1", type:"expense", amount:2850,  category:"Alimentación",    description:"Supermercado Dia",      date:"2025-07-10", source:"digital", wallet:"mercadopago", recurring:false },
   { id:"mp2", type:"expense", amount:1200,  category:"Transporte",      description:"SUBE - recarga",        date:"2025-07-09", source:"digital", wallet:"mercadopago", recurring:false },
@@ -99,13 +119,65 @@ const fDateLong = d =>
   }).replace(/^\w/,c=>c.toUpperCase());
 const uid = () => Math.random().toString(36).slice(2,10);
 
-/* ─── Hook: slot machine animation ──────────────────────────
-   Simula un tambor de lotería:
-   - Inicia lento (intervalos largos entre números)
-   - Acelera progresivamente (intervalos que se acortan, ease-in)
-   - Cada número intermedio desliza hacia arriba o abajo
-   - Devuelve { val, animKey, dir } para disparar el CSS slide
-─────────────────────────────────────────────────────────── */
+/* ─── Clasificadores inteligentes (retrocompatibles con CSV/DB) ─── */
+const isInternalTransfer = tx => {
+  const d = (tx.description || "").toLowerCase();
+  if (d.startsWith("[transferencia]")) return true;
+  // Detecta tus registros históricos de pases entre Efectivo y Lemon
+  return [
+    "de efectivo a lemon",
+    "paso a lemon",
+    "pase a lemon",
+    "ingreso de efectivo a lemoncash",
+    "me paso a lemoncash",
+    "cambio de efectivo a lemon"
+  ].some(p => d.includes(p));
+};
+
+const isInvestmentTx = tx => {
+  if (tx.type === "investment") return true;
+  const d = (tx.description || "").toLowerCase();
+  if (d.startsWith("[inversión]") || d.startsWith("[inversion]")) return true;
+  if (tx.type === "expense" && (
+    INVESTMENT_CATS.includes(tx.category) ||
+    ["poner para inversion", "poner inversión", "prueba bull market", "bull market"].some(p => d.includes(p))
+  )) return true;
+  return false;
+};
+
+const isAutoFixedTx = tx => {
+  if (tx.recurring) return true;
+  if (tx.type !== "expense" || isInternalTransfer(tx) || isInvestmentTx(tx)) return false;
+  const d = (tx.description || "").toLowerCase();
+  return FIXED_KEYWORDS.some(kw => {
+    const r = new RegExp(`(^|\\s|[^a-záéíóúñ])${kw}($|\\s|[^a-záéíóúñ])`, "i");
+    return r.test(d);
+  });
+};
+
+// Parsea si un gasto tiene formato de cuenta dividida:
+// "Hamburguesas [Mi parte: $30000 | Me deben: $88000 (Facu, Luzzi)]"
+const parseSplitInfo = tx => {
+  const desc = tx.description || "";
+  const match = desc.match(/\[Mi parte:\s*\$(\d+(?:\.\d+)?)\s*\|\s*Me deben:\s*\$(\d+(?:\.\d+)?)(?:\s*\(([^)]+)\))?\]/i);
+  if (!match) return null;
+  const cleanDesc = desc.replace(match[0], "").trim();
+  return {
+    cleanDesc: cleanDesc || desc,
+    myShare:   parseFloat(match[1]) || 0,
+    owed:      parseFloat(match[2]) || 0,
+    debtors:   match[3] ? match[3].trim() : "Amigos / Terceros",
+  };
+};
+
+// Devuelve el gasto real para estadísticas (descuenta lo que te deben en gastos compartidos)
+const getEffectiveExpense = tx => {
+  const split = parseSplitInfo(tx);
+  if (split) return split.myShare;
+  return tx.amount;
+};
+
+/* ─── Hook: slot machine animation ────────────────────────── */
 function useSlotMachine(target, duration = 1100) {
   const [state, setState] = useState({ val: target, animKey: 0, dir: 0 });
   const prevRef  = useRef(target);
@@ -122,10 +194,7 @@ function useSlotMachine(target, duration = 1100) {
     timers.current.forEach(clearTimeout);
     timers.current = [];
 
-    // 20 ticks — más ticks = efecto de tambor más notorio
     const N = 20;
-    // Intervalos decrecientes: i=1 es el más largo (lento), i=N el más corto (rápido)
-    // interval[i] = C * (N - i + 1)²  →  cuadrático = aceleración más dramática
     const sumWeights = Array.from({length:N},(_,i)=>Math.pow(N-i,2)).reduce((a,b)=>a+b,0);
     const C = duration / sumWeights;
     let cumTime = 0;
@@ -133,7 +202,6 @@ function useSlotMachine(target, duration = 1100) {
     for (let i = 1; i <= N; i++) {
       const interval = C * Math.pow(N - i + 1, 2);
       cumTime += interval;
-      // Progresión de valor: p^3 concentra todos los cambios grandes al final
       const p   = Math.pow(i / N, 3);
       const val = i === N ? to : Math.round(from + (to - from) * p);
 
@@ -151,17 +219,13 @@ function useSlotMachine(target, duration = 1100) {
   return state;
 }
 
-/* ─── Component: SwipeableRow ────────────────────────────────
-   En mobile: deslizar a la izquierda revela botón de eliminar.
-   En desktop: el botón de eliminar aparece en el hover del padre.
-   Nunca muestra el botón permanentemente — reduce el ruido visual.
-─────────────────────────────────────────────────────────── */
+/* ─── Component: SwipeableRow ─────────────────────────────── */
 function SwipeableRow({ id, onDeleteRequest, children }) {
   const [swipeX, setSwipeX]   = useState(0);
   const [opened, setOpened]   = useState(false);
   const startX = useRef(0);
   const moving = useRef(false);
-  const PANEL  = 76; // width of delete panel px
+  const PANEL  = 76;
   const THRESH = 50;
 
   const onTouchStart = e => {
@@ -182,14 +246,12 @@ function SwipeableRow({ id, onDeleteRequest, children }) {
 
   return (
     <div style={{position:"relative", overflow:"hidden"}}>
-      {/* Red panel behind */}
       <div style={{position:"absolute", right:0, top:0, bottom:0, width:PANEL,
           background:"#DC2626", display:"flex", alignItems:"center", justifyContent:"center",
           cursor:"pointer"}}
            onClick={() => { setSwipeX(0); setOpened(false); onDeleteRequest(id); }}>
         <Trash2 size={19} color="#fff"/>
       </div>
-      {/* Slideable content */}
       <div style={{transform:`translateX(-${swipeX}px)`,
           transition: moving.current ? "none" : "transform .25s ease-out"}}
            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
@@ -211,14 +273,10 @@ const CustomTooltip = ({ active, payload }) => {
   );
 };
 
-/* ─── Component: DonutWithTooltip ────────────────────────────
-   Tooltip que aparece siempre en la parte SUPERIOR de la dona,
-   nunca sobre el centro. Mismo estilo que el tooltip original.
-─────────────────────────────────────────────────────────── */
+/* ─── Component: DonutWithTooltip ─────────────────────────── */
 function DonutWithTooltip({ data, total }) {
   const [tip, setTip] = useState(null);
 
-  /* Recharts pasa los datos del segmento en onMouseEnter del Pie */
   const handleEnter = (sliceData) => {
     setTip({
       name:  sliceData.name,
@@ -231,8 +289,6 @@ function DonutWithTooltip({ data, total }) {
 
   return (
     <div style={{position:"relative", marginBottom:4}}>
-
-      {/* Tooltip flotante — aparece arriba del gráfico, nunca tapa el centro */}
       <div style={{
         position:"absolute", top:-10, left:"50%", transform:"translateX(-50%)",
         zIndex:20, pointerEvents:"none",
@@ -271,11 +327,9 @@ function DonutWithTooltip({ data, total }) {
           >
             {data.map((e,i)=><Cell key={i} fill={e.color}/>)}
           </Pie>
-          {/* Sin Tooltip de Recharts — usamos el nuestro arriba */}
         </PieChart>
       </ResponsiveContainer>
 
-      {/* Centro de la dona — siempre visible */}
       <div style={{position:"absolute",top:"50%",left:"50%",
           transform:"translate(-50%,-50%)",textAlign:"center",pointerEvents:"none",zIndex:1}}>
         <p style={{fontSize:10,color:"#64748B",fontWeight:600,
@@ -320,7 +374,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
 
   return (
     <div className="fc">
-      {/* Header de la página */}
       <header className="glass" style={{position:"sticky",top:0,zIndex:40,padding:"11px 20px",
           display:"flex",alignItems:"center",gap:14}}>
         <button onClick={onClose}
@@ -332,7 +385,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
       </header>
 
       <div className="wrap">
-        {/* Summary card */}
         <div className="card" style={{display:"flex",alignItems:"center",justifyContent:"space-between",
             marginBottom:20,gap:16}}>
           <div>
@@ -347,7 +399,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
           </div>
         </div>
 
-        {/* Tabs Conectados / Directorio */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",background:"#0F172A",
             border:"1px solid #1E293B",borderRadius:14,padding:5,gap:4,marginBottom:20}}>
           {[["connected",`Conectados  ${connectedNoEf.length}`],["directory",`Directorio  ${ARG_BANKS.length}`]].map(([v,l])=>(
@@ -361,7 +412,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
           ))}
         </div>
 
-        {/* ── Tab: Conectados ── */}
         {view==="connected" && (
           connectedNoEf.length === 0 ? (
             <div className="card" style={{textAlign:"center",padding:"48px 24px"}}>
@@ -383,7 +433,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
                 const bal  = walletBalance(id);
                 return (
                   <div key={id} className="card" style={{position:"relative",overflow:"hidden"}}>
-                    {/* Glow background */}
                     <div style={{position:"absolute",right:-40,top:-40,width:160,height:160,borderRadius:"50%",
                         background:bank.color,opacity:.07,filter:"blur(4px)",pointerEvents:"none"}}/>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -422,10 +471,8 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
           )
         )}
 
-        {/* ── Tab: Directorio ── */}
         {view==="directory" && (
           <div style={{display:"flex",flexDirection:"column",gap:20}}>
-            {/* Search */}
             <div style={{display:"flex",alignItems:"center",gap:8,background:"#0F172A",
                 border:"1px solid #1E293B",borderRadius:14,padding:"12px 16px"}}>
               <Search size={15} color="#475569"/>
@@ -435,7 +482,6 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
                   color:"#F1F5F9",fontFamily:"inherit"}}/>
             </div>
 
-            {/* Bancos */}
             {[{title:"Bancos",items:bancos},{title:"Billeteras virtuales",items:billeteras}].map(({title,items})=>(
               <div key={title} className="card" style={{padding:0,overflow:"hidden"}}>
                 <p style={{fontSize:14,fontWeight:700,padding:"16px 20px 10px"}}>{title}</p>
@@ -481,10 +527,7 @@ function BanksPage({ connectedIds, txs, walletBalance, onSave, onClose }) {
   );
 }
 
-/* ─── Component: SourceLegend ────────────────────────────────
-   Primera billetera visible, el resto colapsable.
-   Ordenado de mayor a menor porcentaje (ya viene ordenado).
-─────────────────────────────────────────────────────────── */
+/* ─── Component: SourceLegend ─────────────────────────────── */
 function SourceLegend({ items, total }) {
   const [open, setOpen] = useState(false);
   if (!items.length) return null;
@@ -492,7 +535,6 @@ function SourceLegend({ items, total }) {
   const pctFirst = total>0 ? Math.round((first.value/total)*100) : 0;
   return (
     <div style={{marginTop:10}}>
-      {/* Primera fila — siempre visible */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"10px 12px",borderRadius:10,background:"#1E293B",marginBottom:rest.length?6:0}}>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -514,7 +556,6 @@ function SourceLegend({ items, total }) {
           )}
         </div>
       </div>
-      {/* Resto — colapsable */}
       {open && rest.map(d=>{
         const pct = total>0 ? Math.round((d.value/total)*100) : 0;
         return (
@@ -698,17 +739,14 @@ export default function FlowCash() {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    // Si hay token guardado en sessionStorage, verificarlo con el backend
     if (authApi.isLoggedIn()) {
       const cached = loadSession();
       if (cached) {
-        // Verificar que el token sigue siendo válido
         authApi.me()
           .then(data => {
             setSession({ userId: data.user.id, email: data.user.email });
           })
           .catch(() => {
-            // Token expirado o inválido — cerrar sesión
             clearSession();
           })
           .finally(() => setChecked(true));
@@ -743,13 +781,15 @@ function AppContent({ session, onLogout }) {
   const { userId, email } = session;
   const [txs, setTxs]         = useState([]);
   const [loading, setLoading] = useState(true);
-  const [netError, setNetError] = useState(null); // error de red
+  const [netError, setNetError] = useState(null);
 
   const [tab, setTab]                       = useState("dashboard");
   const [showModal, setShowModal]           = useState(false);
   const [showLogout, setShowLogout]         = useState(false);
   const [showBanks, setShowBanks]           = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [settleModalTx, setSettleModalTx]   = useState(null); // Modal para cobrar deuda compartida
+  const [settledIds, setSettledIds]         = useState(() => loadSettled());
   const [apiDone, setApiDone]               = useState(false);
   const [syncing, setSyncing]               = useState(false);
   const [syncStep, setSyncStep]             = useState(0);
@@ -758,11 +798,10 @@ function AppContent({ session, onLogout }) {
   const [query, setQuery]                   = useState("");
   const [toast, setToast]                   = useState(null);
 
-  // Billeteras conectadas — se cargan del backend y se sincronizan
+  // Billeteras conectadas
   const [connectedIds, setConnectedIds] = useState(["efectivo"]);
   const [walletsLoaded, setWalletsLoaded] = useState(false);
 
-  // Cargar transacciones y billeteras del backend al montar
   useEffect(() => {
     Promise.all([
       txApi.getAll(),
@@ -786,29 +825,66 @@ function AppContent({ session, onLogout }) {
       showToast(e.message || "Error al guardar", false);
     }
   };
-  const [form, setForm] = useState(() => {
-    const firstDigital = connectedIds.find(id => id !== "efectivo") || "mercadopago";
-    return {
-      type:"expense", amount:"", category:"Alimentación",
-      description:"", date:new Date().toISOString().split("T")[0],
-      source:"digital", wallet:firstDigital, recurring:false, dueDay:"",
-    };
-  });
 
-  /* ── Computed ── */
-  const income   = txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const expenses = txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const balance  = income - expenses;
-  const savingsRate = income>0 ? Math.max(0,Math.round((balance/income)*100)) : 0;
+  /* MEJORA 2: Categoría inicial vacía ("") para obligar a elegir */
+  const getInitialForm = useCallback((mode = "expense") => {
+    const firstDigital = connectedIds.find(id => id !== "efectivo") || "lemoncash";
+    return {
+      type: mode,               // "expense" | "income" | "investment" | "transfer"
+      amount: "",
+      category: mode === "transfer" ? "Transferencia" : "", // Vacío por defecto salvo en transferencia
+      description: "",
+      date: new Date().toISOString().split("T")[0],
+      source: "digital",
+      wallet: firstDigital,
+      fromWallet: "efectivo",
+      toWallet: firstDigital,
+      recurring: false,
+      autoRecurringDetected: false,
+      dueDay: "",
+      // MEJORA 4: Campos de "Dividir cuenta / Me deben"
+      isSplit: false,
+      myShare: "",
+      splitWith: "",
+    };
+  }, [connectedIds]);
+
+  const [form, setForm] = useState(() => getInitialForm("expense"));
+
+  /* ── Computed (Excluyendo Transferencias Internas e Inversiones de los Gastos Operativos) ── */
+  const realIncomeTxs  = txs.filter(t => t.type === "income" && !isInternalTransfer(t));
+  const realExpenseTxs = txs.filter(t => t.type === "expense" && !isInternalTransfer(t) && !isInvestmentTx(t));
+  const investmentTxs  = txs.filter(t => isInvestmentTx(t));
+
+  const income      = realIncomeTxs.reduce((s,t) => s + t.amount, 0);
+  // En gastos operativos usamos getEffectiveExpense (si fue compartido, toma tu parte real)
+  const expenses    = realExpenseTxs.reduce((s,t) => s + getEffectiveExpense(t), 0);
+  const invested    = investmentTxs.reduce((s,t) => s + t.amount, 0);
+
+  // El Saldo Total disponible en billeteras sí contempla todas las entradas y salidas reales de caja
+  const walletBalance = useCallback(id => {
+    if (id === "efectivo") {
+      const wt = txs.filter(t => t.wallet==="manual" || t.source==="cash");
+      return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
+            -wt.filter(t=>t.type!=="income").reduce((s,t)=>s+t.amount,0);
+    }
+    const wt = txs.filter(t => t.wallet===id && t.source!=="cash");
+    return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
+          -wt.filter(t=>t.type!=="income").reduce((s,t)=>s+t.amount,0);
+  }, [txs]);
+
+  const balance = connectedIds.reduce((s, id) => s + walletBalance(id), 0);
+
+  // Tasa de ahorro + inversión real sobre ingresos reales
+  const totalSavedOrInvested = Math.max(0, income - expenses);
+  const savingsRate = income > 0 ? Math.min(100, Math.max(0, Math.round((totalSavedOrInvested / income) * 100))) : 0;
+  const investmentRate = income > 0 ? Math.min(100, Math.round((invested / income) * 100)) : 0;
 
   // Slot machine animated values for the hero
   const slotBalance  = useSlotMachine(balance);
   const slotIncome   = useSlotMachine(income);
   const slotExpenses = useSlotMachine(expenses);
 
-  // Component: renders a number with slot machine slide animation.
-  // La duración del slide se adapta: ticks lentos = slide largo (perceptible),
-  // ticks rápidos = slide muy corto (se funde en el movimiento general).
   const SlotNumber = ({ slot, style }) => (
     <span className="slot-wrap" style={style}>
       <span
@@ -824,101 +900,237 @@ function AppContent({ session, onLogout }) {
     </span>
   );
 
+  // Gráficos por categoría (solo Gastos Reales Operativos, sin transferencias ni inversiones)
   const byCat = EXPENSE_CATS
-    .map(cat=>({ name:cat, color:CAT_META[cat]?.color,
-      value:txs.filter(t=>t.type==="expense"&&t.category===cat).reduce((s,t)=>s+t.amount,0) }))
-    .filter(d=>d.value>0)
-    .sort((a,b)=>b.value-a.value);
+    .map(cat => ({
+      name: cat,
+      color: CAT_META[cat]?.color,
+      value: realExpenseTxs.filter(t => t.category === cat).reduce((s,t) => s + getEffectiveExpense(t), 0)
+    }))
+    .filter(d => d.value > 0)
+    .sort((a,b) => b.value - a.value);
 
-  const walletBalance = useCallback(id => {
-    // "efectivo" = transacciones con wallet==="manual" o source==="cash"
-    if (id === "efectivo") {
-      const wt = txs.filter(t => t.wallet==="manual" || t.source==="cash");
-      return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
-            -wt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-    }
-    const wt = txs.filter(t => t.wallet===id);
-    return wt.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0)
-          -wt.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  }, [txs]);
-
-  // Totales para el donut — ordenados de mayor a menor
+  // Totales para el donut — ordenados de mayor a menor (sin transferencias internas)
   const walletTotals = connectedIds.map(id => {
     const bank  = getBank(id);
-    const value = txs.filter(t => id==="efectivo" ? (t.wallet==="manual"||t.source==="cash") : t.wallet===id)
-                     .reduce((s,t) => s + t.amount, 0);
+    const value = realExpenseTxs
+      .filter(t => id==="efectivo" ? (t.wallet==="manual"||t.source==="cash") : (t.wallet===id && t.source!=="cash"))
+      .reduce((s,t) => s + getEffectiveExpense(t), 0);
     return { id, name: bank?.name||id, value, color: bank?.color||"#64748B" };
   }).filter(d => d.value > 0).sort((a,b) => b.value - a.value);
   const walletTotal = walletTotals.reduce((s,d)=>s+d.value,0);
 
-  // Gastos fijos
-  const recurringExpenses = txs.filter(t=>t.type==="expense"&&t.recurring);
-  const monthlyCommitted  = Array.from(
-    new Map(recurringExpenses.map(t=>[`${t.description}__${t.amount}`,t])).values()
-  ).reduce((s,t)=>s+t.amount,0);
+  // MEJORA 3: Gastos fijos (combina los marcados manualmente + los auto-detectados como Calistenia, Cuotas, HBO, Nutricionista)
+  const recurringExpenses = realExpenseTxs.filter(t => isAutoFixedTx(t));
+  const uniqueRecurring = Array.from(
+    new Map(recurringExpenses.map(t => [t.description.trim().toLowerCase(), t])).values()
+  ).sort((a,b) => (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
+  const monthlyCommitted = uniqueRecurring.reduce((s,t) => s + getEffectiveExpense(t), 0);
+
+  // MEJORA 4: Cuentas divididas / "Me deben" pendientes de cobro
+  const pendingSplits = txs
+    .map(tx => {
+      const sp = parseSplitInfo(tx);
+      if (!sp || settledIds.includes(tx.id)) return null;
+      return { tx, ...sp };
+    })
+    .filter(Boolean);
+  const totalOwedToMe = pendingSplits.reduce((s, item) => s + item.owed, 0);
 
   // Today's day-of-month for due date detection
   const todayDay = new Date().getDate();
   const isDueSoon = d => d && (Number(d) - todayDay) >= 0 && (Number(d) - todayDay) <= 7;
 
-  // Monthly evolution — last 6 months
+  // Monthly evolution — last 6 months (limpio de transferencias internas)
   const monthlyData = (() => {
     const result = [];
     for (let i=5; i>=0; i--) {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
       const y=d.getFullYear(), m=d.getMonth();
       const label = d.toLocaleDateString('es-AR',{month:'short'}).replace('.','').toUpperCase();
-      const mTxs  = txs.filter(t=>{ const td=new Date(t.date+"T00:00:00"); return td.getFullYear()===y&&td.getMonth()===m; });
-      const inc = mTxs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-      const exp = mTxs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+      const mInc  = realIncomeTxs.filter(t=>{ const td=new Date(t.date+"T00:00:00"); return td.getFullYear()===y&&td.getMonth()===m; });
+      const mExp  = realExpenseTxs.filter(t=>{ const td=new Date(t.date+"T00:00:00"); return td.getFullYear()===y&&td.getMonth()===m; });
+      const inc = mInc.reduce((s,t)=>s+t.amount,0);
+      const exp = mExp.reduce((s,t)=>s+getEffectiveExpense(t),0);
       result.push({ label, Ingresos:inc, Gastos:exp, net:inc-exp });
     }
     return result;
   })();
 
   // Unique categories with transactions
-  const availableCats = ["all",...Array.from(new Set(txs.map(t=>t.category))).sort()];
+  const availableCats = ["all",...Array.from(new Set(txs.map(t=>t.category).filter(Boolean))).sort()];
 
   const filtered = txs.filter(t=>{
     const mt = filterType==="all" ? true
-             : filterType==="recurring" ? !!t.recurring
-             : t.type===filterType;
+             : filterType==="recurring" ? isAutoFixedTx(t)
+             : filterType==="investment" ? isInvestmentTx(t)
+             : filterType==="transfer" ? isInternalTransfer(t)
+             : filterType==="split" ? !!parseSplitInfo(t)
+             : filterType==="expense" ? (t.type==="expense" && !isInternalTransfer(t) && !isInvestmentTx(t))
+             : (t.type==="income" && !isInternalTransfer(t));
     const mc = filterCat==="all"||t.category===filterCat;
-    const mq = t.description.toLowerCase().includes(query.toLowerCase())||
-               t.category.toLowerCase().includes(query.toLowerCase());
+    const mq = (t.description||"").toLowerCase().includes(query.toLowerCase())||
+               (t.category||"").toLowerCase().includes(query.toLowerCase());
     return mt&&mc&&mq;
   });
 
   /* ── Actions ── */
   const showToast = (msg,ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),3000); };
 
+  // Handler de descripción con auto-detección de Gasto Fijo (Mejora 3)
+  const handleDescriptionChange = val => {
+    const lower = val.toLowerCase();
+    const matchedFixed = FIXED_KEYWORDS.some(kw => {
+      const r = new RegExp(`(^|\\s|[^a-záéíóúñ])${kw}($|\\s|[^a-záéíóúñ])`, "i");
+      return r.test(lower);
+    });
+    setForm(f => ({
+      ...f,
+      description: val,
+      recurring: (f.type === "expense" && matchedFixed) ? true : f.recurring,
+      autoRecurringDetected: (f.type === "expense" && matchedFixed),
+    }));
+  };
+
   const addTx = async () => {
-    if (!form.amount||!form.description) return;
-    const rw = form.source==="cash"?"manual":form.wallet;
+    const totalAmt = parseFloat(form.amount);
+    if (!totalAmt || totalAmt <= 0) return;
+
+    // ── CASO A: TRANSFERENCIA ENTRE BILLETERAS (Mejora 1) ──
+    if (form.type === "transfer") {
+      if (form.fromWallet === form.toWallet) {
+        showToast("Elegí dos billeteras distintas", false);
+        return;
+      }
+      const fromBank = getBank(form.fromWallet);
+      const toBank   = getBank(form.toWallet);
+      const note     = form.description.trim() ? ` (${form.description.trim()})` : "";
+
+      const outWallet = form.fromWallet === "efectivo" ? "manual" : form.fromWallet;
+      const outSource = form.fromWallet === "efectivo" ? "cash"   : "digital";
+      const inWallet  = form.toWallet   === "efectivo" ? "manual" : form.toWallet;
+      const inSource  = form.toWallet   === "efectivo" ? "cash"   : "digital";
+
+      const payloadOut = {
+        type: "expense",
+        amount: totalAmt,
+        category: "Transferencia",
+        description: `[Transferencia] Pase a ${toBank?.name || form.toWallet}${note}`,
+        date: form.date,
+        source: outSource,
+        wallet: outWallet,
+        wallet_name: outWallet,
+        recurring: false,
+        dueDay: "",
+      };
+      const payloadIn = {
+        type: "income",
+        amount: totalAmt,
+        category: "Transferencia",
+        description: `[Transferencia] Ingreso desde ${fromBank?.name || form.fromWallet}${note}`,
+        date: form.date,
+        source: inSource,
+        wallet: inWallet,
+        wallet_name: inWallet,
+        recurring: false,
+        dueDay: "",
+      };
+
+      try {
+        const [resOut, resIn] = await Promise.all([
+          txApi.create(payloadOut),
+          txApi.create(payloadIn),
+        ]);
+        const txOut = { ...payloadOut, id: resOut.transaction.id };
+        const txIn  = { ...payloadIn,  id: resIn.transaction.id };
+        setTxs(p => [txIn, txOut, ...p]);
+        setShowModal(false);
+        setForm(getInitialForm("expense"));
+        showToast("Transferencia entre billeteras registrada ✓");
+      } catch(e) {
+        showToast(e.message || "Error al transferir", false);
+      }
+      return;
+    }
+
+    // Validación obligatoria de descripción y categoría (Mejora 2)
+    if (!form.description.trim() || !form.category) return;
+
+    const rw = form.source === "cash" ? "manual" : form.wallet;
+
+    // Armado de descripción para Inversión o Gasto Compartido (Mejoras 1 y 4)
+    let finalDesc = form.description.trim();
+    if (form.type === "investment" && !finalDesc.toLowerCase().startsWith("[inversión]")) {
+      finalDesc = `[Inversión] ${finalDesc}`;
+    } else if (form.type === "expense" && form.isSplit) {
+      const myShareNum = parseFloat(form.myShare) || 0;
+      const owedNum    = Math.max(0, totalAmt - myShareNum);
+      if (owedNum > 0) {
+        const who = form.splitWith.trim() ? ` (${form.splitWith.trim()})` : "";
+        finalDesc = `${finalDesc} [Mi parte: $${myShareNum} | Me deben: $${owedNum}${who}]`;
+      }
+    }
+
+    // Para mantener 100% compatibilidad con el backend, "investment" se guarda como "expense" con prefijo y categoría de inversión
+    const backendType = form.type === "investment" ? "expense" : form.type;
+
     const payload = {
-      ...form,
-      amount:      parseFloat(form.amount),
-      wallet_name: rw,
+      type:        backendType,
+      amount:      totalAmt,
+      category:    form.category,
+      description: finalDesc,
+      date:        form.date,
       source:      form.source,
-      dueDay:      form.recurring ? form.dueDay : "",
+      wallet:      rw,
+      wallet_name: rw,
+      recurring:   form.type === "expense" ? !!form.recurring : false,
+      dueDay:      (form.type === "expense" && form.recurring) ? form.dueDay : "",
+    };
+
+    try {
+      const data = await txApi.create(payload);
+      const newTx = {
+        ...payload,
+        id:     data.transaction.id,
+        wallet: rw,
+        date:   form.date,
+      };
+      setTxs(p => [newTx, ...p]);
+      setShowModal(false);
+      setForm(getInitialForm("expense"));
+      showToast(form.type === "investment" ? "Inversión registrada ✓" : "Movimiento guardado ✓");
+    } catch(e) {
+      showToast(e.message || "Error al guardar", false);
+    }
+  };
+
+  // Saldar una deuda de "Me deben" creando el ingreso de reintegro o marcándola cobrada
+  const handleSettleSplit = async (item, targetWalletId) => {
+    const rw = targetWalletId === "efectivo" ? "manual" : targetWalletId;
+    const src = targetWalletId === "efectivo" ? "cash" : "digital";
+    const payload = {
+      type: "income",
+      amount: item.owed,
+      category: "Transferencia",
+      description: `Reintegro ${item.debtors}: ${item.cleanDesc}`,
+      date: new Date().toISOString().split("T")[0],
+      source: src,
+      wallet: rw,
+      wallet_name: rw,
+      recurring: false,
+      dueDay: "",
     };
     try {
       const data = await txApi.create(payload);
-      // El backend devuelve el movimiento con su ID de PostgreSQL
-      const newTx = {
-        ...payload,
-        id:      data.transaction.id,
-        wallet:  rw,
-        date:    form.date,
-      };
-      setTxs(p=>[newTx,...p]);
-      setShowModal(false);
-      setForm({type:"expense",amount:"",category:"Alimentación",description:"",
-               date:new Date().toISOString().split("T")[0],source:"digital",
-               wallet:connectedIds.find(id=>id!=="efectivo")||"mercadopago",recurring:false,dueDay:""});
-      showToast("Movimiento guardado ✓");
+      const newTx = { ...payload, id: data.transaction.id };
+      setTxs(p => [newTx, ...p]);
+      const nextSettled = [...settledIds, item.tx.id];
+      setSettledIds(nextSettled);
+      saveSettled(nextSettled);
+      setSettleModalTx(null);
+      showToast(`Cobro de ${fARS(item.owed)} acreditado ✓`);
     } catch(e) {
-      showToast(e.message || "Error al guardar", false);
+      showToast(e.message || "Error al registrar el cobro", false);
     }
   };
 
@@ -979,13 +1191,11 @@ function AppContent({ session, onLogout }) {
     .btn-p:hover{opacity:.9;} .btn-p:active{transform:scale(.98);}
     .btn-p:disabled{opacity:.35;cursor:not-allowed;}
     .pill{display:flex;background:#1E293B;border-radius:12px;padding:4px;gap:4px;}
-    .pill-o{flex:1;padding:10px;border-radius:10px;font-size:13px;font-weight:600;border:none;
+    .pill-o{flex:1;padding:10px 6px;border-radius:10px;font-size:12px;font-weight:700;border:none;
       cursor:pointer;font-family:inherit;color:#64748B;background:none;transition:all .2s;}
     .fade-in{animation:fu .28s ease-out both;}
     @keyframes slotUp   { from{transform:translateY(70%);opacity:0;filter:blur(1.5px)} to{transform:translateY(0);opacity:1;filter:blur(0)} }
     @keyframes slotDown { from{transform:translateY(-70%);opacity:0;filter:blur(1.5px)} to{transform:translateY(0);opacity:1;filter:blur(0)} }
-    .slot-wrap{display:inline-block;overflow:hidden;vertical-align:bottom;}
-    .slot-inner{display:inline-block;}
     .slot-wrap{overflow:hidden;display:inline-block;vertical-align:baseline;}
     .slot-inner{display:inline-block;}
     @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
@@ -1002,7 +1212,6 @@ function AppContent({ session, onLogout }) {
     .wrap{max-width:1180px;margin:0 auto;padding:16px 20px 96px;}
     .db-grid{display:grid;grid-template-columns:1fr;gap:14px;}
     .col{display:flex;flex-direction:column;gap:14px;}
-    /* Charts: mobile = column (bars first), desktop = 2 cols */
     .ch-wrap{display:flex;flex-direction:column;gap:14px;}
     .ch-top{display:flex;flex-direction:column;gap:14px;}
     @media(min-width:720px){
@@ -1017,28 +1226,24 @@ function AppContent({ session, onLogout }) {
   `;
 
   /* ── Sub-components ── */
-  const TxIcon = ({cat,size=36}) => {
-    const m=CAT_META[cat]||CAT_META["Otros"], I=m.Icon;
+  const TxIcon = ({tx, size=36}) => {
+    const catKey = isInternalTransfer(tx) ? "Transferencia" : isInvestmentTx(tx) ? "Inversiones" : tx.category;
+    const m = CAT_META[catKey] || CAT_META["Otros"], I = m.Icon;
     return <div style={{width:size,height:size,borderRadius:10,background:m.color+"20",
         display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
       <I size={Math.round(size*.44)} color={m.color}/></div>;
   };
 
   const sourceLabel = tx => {
-    if (tx.source==="cash") return { icon:"💵", text:"Efectivo", color:"#34D399" };
+    if (tx.source==="cash" || tx.wallet==="manual") return { icon:"💵", text:"Efectivo", color:"#34D399" };
+    const bank = getBank(tx.wallet);
+    if (bank) return { icon:"💳", text:bank.name, color:bank.color };
     const w=WALLETS[tx.wallet];
     if (w&&tx.wallet!=="manual") return { icon:"💳", text:w.label, color:w.color };
     return { icon:"💳", text:"Digital", color:"#60A5FA" };
   };
 
-  /* ── Recurring unique list (for commitments card) ── */
-  const uniqueRecurring = Array.from(
-    new Map(recurringExpenses.map(t=>[`${t.description}__${t.amount}`,t])).values()
-  ).sort((a,b)=> (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
-
   /* ═══════════════ RENDER ═══════════════ */
-
-  // Pantalla de carga mientras se traen los datos del backend
   if (loading) return (
     <div style={{minHeight:"100vh",background:"#020617",display:"flex",
         alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
@@ -1051,7 +1256,6 @@ function AppContent({ session, onLogout }) {
     </div>
   );
 
-  // Pantalla de error de red
   if (netError) return (
     <div style={{minHeight:"100vh",background:"#020617",display:"flex",
         alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1080,7 +1284,6 @@ function AppContent({ session, onLogout }) {
     </div>
   );
 
-  // Página completa de bancos — reemplaza toda la UI
   if (showBanks) return (
     <>
       <style>{css}</style>
@@ -1112,6 +1315,15 @@ function AppContent({ session, onLogout }) {
           </span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {/* Acceso rápido a Transferir entre billeteras */}
+          <button
+            onClick={() => { setForm(getInitialForm("transfer")); setShowModal(true); }}
+            title="Transferir entre billeteras"
+            style={{display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:20,
+              background:"rgba(56,189,248,.12)",border:"1px solid rgba(56,189,248,.28)",
+              color:"#38BDF8",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+            <ArrowLeftRight size={12}/> Transferir
+          </button>
           <span style={{fontSize:13,fontWeight:700,padding:"5px 13px",borderRadius:20,
             background:balance>=0?"rgba(52,211,153,.12)":"rgba(244,114,182,.12)",
             color:balance>=0?"#34D399":"#F472B6",
@@ -1123,7 +1335,6 @@ function AppContent({ session, onLogout }) {
               justifyContent:"center"}} title={email}>
             <User size={14} color="#818CF8"/>
           </div>
-          {/* Botón bancos con badge */}
           <button onClick={()=>setShowBanks(true)}
             style={{width:30,height:30,borderRadius:9,background:"rgba(99,102,241,.15)",
               border:"1px solid rgba(99,102,241,.25)",display:"flex",alignItems:"center",
@@ -1179,23 +1390,22 @@ function AppContent({ session, onLogout }) {
                 <div style={{position:"absolute",top:-48,right:-48,width:170,height:170,
                   background:"radial-gradient(circle,rgba(255,255,255,.1),transparent)",borderRadius:"50%"}}/>
                 <p style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.6)",letterSpacing:1.3,textTransform:"uppercase"}}>
-                  Saldo Total
+                  Saldo Disponible en Billeteras
                 </p>
-                {/* Slot machine balance number */}
                 <p style={{fontSize:42,fontWeight:800,color:"#fff",margin:"8px 0 4px",letterSpacing:"-1.5px"}}>
                   <SlotNumber slot={slotBalance}/>
                 </p>
-                <p style={{fontSize:12,color:"rgba(255,255,255,.45)",marginBottom:22}}>
-                  {txs.length} movimientos registrados
+                <p style={{fontSize:12,color:"rgba(255,255,255,.55)",marginBottom:20}}>
+                  Sin contaminar por pases internos · {invested > 0 ? `Invertido: ${fARS(invested)}` : `${txs.length} movimientos`}
                 </p>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                  {[{label:"Ingresos del mes",slot:slotIncome,Icon:TrendingUp,c:"rgba(52,211,153,.85)"},
-                    {label:"Gastos del mes",slot:slotExpenses,Icon:TrendingDown,c:"rgba(244,114,182,.85)"}].map(({label,slot,Icon:Ic,c})=>(
+                  {[{label:"Ingresos Reales",slot:slotIncome,Icon:TrendingUp,c:"rgba(52,211,153,.9)"},
+                    {label:"Consumo Real",slot:slotExpenses,Icon:TrendingDown,c:"rgba(244,114,182,.9)"}].map(({label,slot,Icon:Ic,c})=>(
                     <div key={label} style={{background:"rgba(255,255,255,.1)",borderRadius:14,padding:"13px 14px"}}>
                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
                         <div style={{width:22,height:22,borderRadius:7,background:"rgba(255,255,255,.15)",
                             display:"flex",alignItems:"center",justifyContent:"center"}}><Ic size={12} color="#fff"/></div>
-                        <p style={{fontSize:10,color:"rgba(255,255,255,.55)",fontWeight:600}}>{label}</p>
+                        <p style={{fontSize:10,color:"rgba(255,255,255,.65)",fontWeight:600}}>{label}</p>
                       </div>
                       <p style={{fontSize:18,fontWeight:800,color:c,letterSpacing:"-.3px"}}>
                         <SlotNumber slot={slot}/>
@@ -1205,15 +1415,24 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Wallet balances */}
+              {/* Wallet balances + Botón Transferir */}
               <div className="card">
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
                   <p style={{fontSize:13,fontWeight:700}}>Saldo por Billetera</p>
-                  <button onClick={()=>setShowBanks(true)}
-                    style={{fontSize:12,color:"#818CF8",background:"none",border:"none",cursor:"pointer",
-                      fontFamily:"inherit",fontWeight:600}}>Gestionar →</button>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <button
+                      onClick={() => { setForm(getInitialForm("transfer")); setShowModal(true); }}
+                      style={{fontSize:11,color:"#38BDF8",background:"rgba(56,189,248,.1)",
+                        border:"1px solid rgba(56,189,248,.25)",borderRadius:8,padding:"4px 9px",
+                        cursor:"pointer",fontFamily:"inherit",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                      <ArrowLeftRight size={11}/> Pasar plata
+                    </button>
+                    <button onClick={()=>setShowBanks(true)}
+                      style={{fontSize:12,color:"#818CF8",background:"none",border:"none",cursor:"pointer",
+                        fontFamily:"inherit",fontWeight:600}}>Gestionar →</button>
+                  </div>
                 </div>
-                <p style={{fontSize:11,color:"#64748B",marginBottom:14}}>Balance neto por fuente (ingresos − gastos)</p>
+                <p style={{fontSize:11,color:"#64748B",marginBottom:14}}>Caja real en cada fuente (incluye pases internos)</p>
                 <div style={{display:"flex",flexDirection:"column",gap:9}}>
                   {connectedIds.map(id => {
                     const bank = getBank(id); if(!bank) return null;
@@ -1230,7 +1449,7 @@ function AppContent({ session, onLogout }) {
                           <p style={{fontSize:15,fontWeight:800,color:bal>=0?bank.color:"#F472B6"}}>
                             {bal>=0?"+":""}{fARS(bal)}
                           </p>
-                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{bal>=0?"superávit":"déficit"}</p>
+                          <p style={{fontSize:10,color:"#475569",marginTop:1}}>{bal>=0?"disponible":"déficit"}</p>
                         </div>
                       </div>
                     );
@@ -1239,7 +1458,7 @@ function AppContent({ session, onLogout }) {
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                         padding:"8px 14px",borderRadius:10,background:"rgba(99,102,241,.07)",
                         border:"1px solid rgba(99,102,241,.15)",marginTop:2}}>
-                      <span style={{fontSize:11,fontWeight:600,color:"#64748B"}}>Total verificado</span>
+                      <span style={{fontSize:11,fontWeight:600,color:"#64748B"}}>Total disponible hoy</span>
                       <span style={{fontSize:13,fontWeight:800,color:balance>=0?"#34D399":"#F472B6"}}>
                         {balance>=0?"+":""}{fARS(balance)}
                       </span>
@@ -1247,53 +1466,124 @@ function AppContent({ session, onLogout }) {
                   )}
                 </div>
               </div>
+
+              {/* MEJORA 4: Tarjeta "Me deben / Cuentas divididas" */}
+              <div className="card" style={{borderColor: totalOwedToMe > 0 ? "rgba(56,189,248,.3)" : "#1E293B"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:30,height:30,borderRadius:9,background:"rgba(56,189,248,.15)",
+                        display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <Users size={15} color="#38BDF8"/>
+                    </div>
+                    <div>
+                      <p style={{fontSize:13,fontWeight:700}}>Me deben / Gastos compartidos</p>
+                      <p style={{fontSize:11,color:"#64748B",marginTop:1}}>Reintegros pendientes de amigos o familia</p>
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <p style={{fontSize:18,fontWeight:800,color:"#38BDF8"}}>{fARS(totalOwedToMe)}</p>
+                    <p style={{fontSize:10,color:"#64748B"}}>por cobrar</p>
+                  </div>
+                </div>
+
+                {pendingSplits.length === 0 ? (
+                  <div style={{textAlign:"center",padding:"10px 0",color:"#475569",fontSize:12,lineHeight:1.6}}>
+                    No tenés cobros pendientes. Al cargar una salida grupal, activá{" "}
+                    <span style={{color:"#38BDF8",fontWeight:600}}>"Dividir cuenta / Me deben"</span>.
+                  </div>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {pendingSplits.map(item => (
+                      <div key={item.tx.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                          gap:10,padding:"10px 12px",borderRadius:11,background:"#1E293B",
+                          border:"1px solid rgba(56,189,248,.2)"}}>
+                        <div style={{minWidth:0,flex:1}}>
+                          <p style={{fontSize:12,fontWeight:700,color:"#F1F5F9",overflow:"hidden",
+                              textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {item.cleanDesc}
+                          </p>
+                          <p style={{fontSize:11,color:"#94A3B8",marginTop:2}}>
+                            Deudor: <b style={{color:"#38BDF8"}}>{item.debtors}</b> · {fDate(item.tx.date)}
+                          </p>
+                          <p style={{fontSize:10,color:"#64748B",marginTop:1}}>
+                            Pagaste {fARS(item.tx.amount)} (Tu parte: {fARS(item.myShare)})
+                          </p>
+                        </div>
+                        <div style={{textAlign:"right",flexShrink:0}}>
+                          <p style={{fontSize:13,fontWeight:800,color:"#38BDF8",marginBottom:5}}>
+                            +{fARS(item.owed)}
+                          </p>
+                          <button
+                            onClick={() => setSettleModalTx(item)}
+                            style={{padding:"5px 10px",borderRadius:8,border:"none",cursor:"pointer",
+                              background:"linear-gradient(135deg,#0284C7,#38BDF8)",color:"#fff",
+                              fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                            Saldar cobro
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* RIGHT */}
             <div className="col">
-              {/* Savings */}
+              {/* MEJORA 1: Tasa de Ahorro + Capital Invertido */}
               <div className="card">
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
                   <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Tasa de ahorro</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Ingresos disponibles tras gastos</p>
+                    <p style={{fontSize:13,fontWeight:700}}>Tasa de Ahorro & Inversión</p>
+                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>
+                      Margen real (Ingresos − Consumo propio)
+                    </p>
                   </div>
                   <div style={{borderRadius:12,padding:"7px 14px",textAlign:"center",
-                      background:savingsRate>=50?"rgba(52,211,153,.1)":savingsRate>=20?"rgba(251,191,36,.1)":"rgba(244,114,182,.1)"}}>
+                      background:savingsRate>=30?"rgba(52,211,153,.1)":savingsRate>=20?"rgba(251,191,36,.1)":"rgba(244,114,182,.1)"}}>
                     <div style={{fontSize:28,fontWeight:800,lineHeight:1,
-                      color:savingsRate>=50?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"}}>
+                      color:savingsRate>=30?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"}}>
                       {savingsRate}%
                     </div>
                     <div style={{fontSize:9,fontWeight:700,color:"#64748B",marginTop:3,textTransform:"uppercase",letterSpacing:".4px"}}>
-                      {savingsRate>=50?"Excelente":savingsRate>=20?"Buena":"Mejorable"}
+                      {savingsRate>=30?"Excelente":savingsRate>=20?"En meta":"Mejorable"}
                     </div>
                   </div>
                 </div>
                 <div className="pb"><div className="pf" style={{
                   width:`${Math.min(100,savingsRate)}%`,
-                  background:savingsRate>=50?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"
+                  background:savingsRate>=30?"#34D399":savingsRate>=20?"#FBBF24":"#F472B6"
                 }}/></div>
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:7,fontSize:10,color:"#334155"}}>
-                  <span>0%</span><span style={{color:"#475569"}}>Meta: 20%+</span><span>100%</span>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,
+                    borderTop:"1px solid #1E293B",fontSize:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <PiggyBank size={14} color="#A78BFA"/>
+                    <span style={{color:"#94A3B8"}}>Capital destinado a Inversión:</span>
+                  </div>
+                  <span style={{fontWeight:800,color:"#A78BFA"}}>
+                    {fARS(invested)} ({investmentRate}%)
+                  </span>
                 </div>
               </div>
 
-              {/* Compromisos del mes — mejorado con dueDay */}
+              {/* MEJORA 3: Compromisos del mes (con auto-detección de Calistenia, Cuotas, HBO, Nutricionista) */}
               <div className="card">
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
                   <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Compromisos del mes</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Gastos fijos que se repiten</p>
+                    <p style={{fontSize:13,fontWeight:700}}>Compromisos Fijos del Mes</p>
+                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>
+                      Detecta automáticamente Calistenia, Cuotas, HBO, Nutricionista, etc.
+                    </p>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
-                    <p style={{fontSize:18,fontWeight:800,color:"#F472B6"}}>{fARS(monthlyCommitted)}</p>
+                    <p style={{fontSize:18,fontWeight:800,color:"#FBBF24"}}>{fARS(monthlyCommitted)}</p>
                     <p style={{fontSize:10,color:"#64748B",marginTop:1}}>comprometido</p>
                   </div>
                 </div>
                 {uniqueRecurring.length===0 ? (
                   <div style={{textAlign:"center",padding:"14px 0",color:"#475569",fontSize:12,lineHeight:1.6}}>
-                    Sin gastos fijos. Al cargar un gasto, activá{" "}
-                    <span style={{color:"#818CF8"}}>"Fijo mensual"</span>.
+                    Sin gastos fijos. Se marcan solos al cargar{" "}
+                    <span style={{color:"#FBBF24"}}>Calistenia, Cuotas, HBO…</span>
                   </div>
                 ) : (
                   <>
@@ -1322,9 +1612,9 @@ function AppContent({ session, onLogout }) {
                               </p>
                             </div>
                             <div style={{flexShrink:0,textAlign:"right"}}>
-                              <p style={{fontSize:13,fontWeight:700,color:"#F472B6"}}>-{fARS(tx.amount)}</p>
-                              <p style={{fontSize:9,fontWeight:600,color:"#F472B6",background:"rgba(244,114,182,.1)",
-                                  borderRadius:5,padding:"1px 5px",marginTop:2}}>📅 mensual</p>
+                              <p style={{fontSize:13,fontWeight:700,color:"#FBBF24"}}>-{fARS(getEffectiveExpense(tx))}</p>
+                              <p style={{fontSize:9,fontWeight:600,color:"#FBBF24",background:"rgba(251,191,36,.12)",
+                                  borderRadius:5,padding:"1px 5px",marginTop:2}}>📅 fijo</p>
                             </div>
                           </div>
                         );
@@ -1333,65 +1623,19 @@ function AppContent({ session, onLogout }) {
                     {income>0 && (
                       <div>
                         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#64748B",marginBottom:5}}>
-                          <span>Impacto sobre ingresos</span>
-                          <span style={{color:"#F472B6",fontWeight:600}}>
+                          <span>Impacto fijo sobre tus ingresos</span>
+                          <span style={{color:"#FBBF24",fontWeight:700}}>
                             {Math.round((monthlyCommitted/income)*100)}%
                           </span>
                         </div>
                         <div className="pb">
                           <div className="pf" style={{width:`${Math.min(100,Math.round((monthlyCommitted/income)*100))}%`,
-                            background:"linear-gradient(to right,#F472B6,#FB7185)"}}/>
+                            background:"linear-gradient(to right,#FBBF24,#F59E0B)"}}/>
                         </div>
                       </div>
                     )}
                   </>
                 )}
-              </div>
-
-              {/* Wallet sync */}
-              <div className="card">
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-                  <div>
-                    <p style={{fontSize:13,fontWeight:700}}>Billeteras Digitales</p>
-                    <p style={{fontSize:11,color:"#64748B",marginTop:3}}>Sincronización vía API</p>
-                  </div>
-                  <div style={{display:"flex",gap:5}}>
-                    {["#00BCFF","#FFD700"].map((c,i)=>(
-                      <div key={i} style={{width:9,height:9,borderRadius:"50%",background:c}}/>
-                    ))}
-                  </div>
-                </div>
-                {syncing && (
-                  <div style={{marginBottom:12,padding:"10px 12px",background:"#1E293B",borderRadius:10}}>
-                    {SYNC_STEPS.map((s,i)=>(
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",
-                          fontSize:12,color:i<=syncStep?"#94A3B8":"#334155"}}>
-                        {i<syncStep?<CheckCircle size={13} color="#34D399"/>
-                         :i===syncStep?<RefreshCw size={13} color="#818CF8" style={{animation:"spin 1s linear infinite"}}/>
-                         :<div style={{width:13,height:13,borderRadius:"50%",border:"1px solid #334155"}}/>}
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:12}}>
-                  {Object.entries(WALLETS).filter(([k])=>k!=="manual").map(([k,w])=>(
-                    <span key={k} className="badge" style={{background:w.color+"18",color:w.color,border:`1px solid ${w.color}30`}}>
-                      {w.label}
-                    </span>
-                  ))}
-                </div>
-                <button onClick={simulateAPI} disabled={apiDone||syncing}
-                  style={{width:"100%",padding:"11px",borderRadius:12,fontSize:13,fontWeight:600,
-                    cursor:(apiDone||syncing)?"default":"pointer",border:"1px solid",fontFamily:"inherit",
-                    display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .2s",
-                    background:apiDone?"rgba(52,211,153,.08)":"rgba(99,102,241,.1)",
-                    color:apiDone?"#34D399":"#818CF8",
-                    borderColor:apiDone?"rgba(52,211,153,.25)":"rgba(99,102,241,.3)"}}>
-                  {syncing?<><RefreshCw size={14} style={{animation:"spin 1s linear infinite"}}/> Sincronizando…</>
-                   :apiDone?<><CheckCircle size={14}/> 8 movimientos importados</>
-                           :<><RefreshCw size={14}/> Simular importación de APIs</>}
-                </button>
               </div>
 
               {/* Recent */}
@@ -1410,23 +1654,28 @@ function AppContent({ session, onLogout }) {
                   </div>
                 ) : (
                   <div>
-                    {txs.slice(0,5).map(tx=>(
-                      <div key={tx.id} className="tx-row">
-                        <TxIcon cat={tx.category}/>
-                        <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {tx.description}
-                          </p>
-                          <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
-                            {tx.category} · {fDate(tx.date)} · {tx.source==="cash"?"💵":"💳"}
-                          </p>
+                    {txs.slice(0,5).map(tx => {
+                      const isTrans = isInternalTransfer(tx);
+                      const isInv   = isInvestmentTx(tx);
+                      const split   = parseSplitInfo(tx);
+                      return (
+                        <div key={tx.id} className="tx-row">
+                          <TxIcon tx={tx}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              {split ? split.cleanDesc : tx.description}
+                            </p>
+                            <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
+                              {isTrans ? "Transferencia interna" : isInv ? "Inversión / Ahorro" : tx.category} · {fDate(tx.date)}
+                            </p>
+                          </div>
+                          <span style={{fontSize:13,fontWeight:700,flexShrink:0,
+                              color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
+                            {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
+                          </span>
                         </div>
-                        <span style={{fontSize:13,fontWeight:700,flexShrink:0,
-                            color:tx.type==="income"?"#34D399":"#F472B6"}}>
-                          {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1437,14 +1686,13 @@ function AppContent({ session, onLogout }) {
         {/* ═══ CHARTS ═══ */}
         {tab==="charts" && (
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
-
-            {/* Row 1: horizontal bars (left) + donut fuentes (right) */}
             <div className="ch-wrap">
-              {/* Horizontal bars: gastos por categoría */}
               <div className="ch-top">
                 <div className="card">
-                  <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Gastos por Categoría</p>
-                  <p style={{fontSize:11,color:"#64748B",marginBottom:18}}>Comparativa de egresos</p>
+                  <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Consumo Real por Categoría</p>
+                  <p style={{fontSize:11,color:"#64748B",marginBottom:18}}>
+                    Limpio de pases entre billeteras, inversiones y parte de amigos
+                  </p>
                   {byCat.length===0 ? (
                     <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>Sin gastos registrados</div>
                   ) : (
@@ -1455,7 +1703,7 @@ function AppContent({ session, onLogout }) {
                         <YAxis type="category" dataKey="name"
                           tick={{fill:"#94A3B8", fontSize:11}} axisLine={false} tickLine={false} width={95}/>
                         <Tooltip content={<CustomTooltip/>} cursor={{fill:"rgba(99,102,241,.06)"}}/>
-                        <Bar dataKey="value" name="Gasto" radius={[0,7,7,0]} maxBarSize={28}>
+                        <Bar dataKey="value" name="Gasto Real" radius={[0,7,7,0]} maxBarSize={28}>
                           {byCat.map((e,i)=><Cell key={i} fill={e.color}/>)}
                           <LabelList dataKey="value" position="right"
                             formatter={v=>fARSShort(v)}
@@ -1464,7 +1712,6 @@ function AppContent({ session, onLogout }) {
                       </BarChart>
                     </ResponsiveContainer>
                   )}
-                  {/* Percentage legend below bars */}
                   {byCat.length>0 && expenses>0 && (
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 12px",marginTop:12}}>
                       {byCat.map(e=>(
@@ -1483,10 +1730,9 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Donut: fuentes (right on desktop, below on mobile) */}
               <div style={{display:"flex",flexDirection:"column",gap:14,flex:"0 0 auto",width:"100%",maxWidth:400}}>
                 <div className="card">
-                  <p style={{fontSize:13,fontWeight:700,marginBottom:18}}>Distribución por Fuente</p>
+                  <p style={{fontSize:13,fontWeight:700,marginBottom:18}}>Consumo por Billetera</p>
                   {walletTotals.length===0 ? (
                     <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>
                       Sin movimientos registrados
@@ -1501,11 +1747,10 @@ function AppContent({ session, onLogout }) {
               </div>
             </div>
 
-            {/* Row 2: Monthly evolution */}
             <div className="card">
-              <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Evolución Mensual</p>
+              <p style={{fontSize:13,fontWeight:700,marginBottom:2}}>Evolución Mensual Real</p>
               <p style={{fontSize:11,color:"#64748B",marginBottom:18}}>
-                Ingresos y gastos de los últimos 6 meses · el número arriba es lo que quedó ese mes
+                Ingresos vs. Gastos reales de los últimos 6 meses · sin distorsión por transferencias internas
               </p>
               {monthlyData.every(m=>m.Ingresos===0&&m.Gastos===0) ? (
                 <div style={{textAlign:"center",padding:"48px 0",color:"#475569",fontSize:13}}>
@@ -1523,7 +1768,6 @@ function AppContent({ session, onLogout }) {
                     <Tooltip content={<CustomTooltip/>} cursor={{fill:"rgba(99,102,241,.06)"}}/>
                     <Legend wrapperStyle={{fontSize:12,color:"#94A3B8",paddingTop:8}}/>
                     <Bar dataKey="Ingresos" fill="#34D399" radius={[5,5,0,0]} maxBarSize={32}>
-                      {/* Net label above each month group */}
                       <LabelList dataKey="net" position="top"
                         content={({x,y,width,value}) => {
                           if (!value && value!==0) return null;
@@ -1549,7 +1793,6 @@ function AppContent({ session, onLogout }) {
         {/* ═══ RECORDS ═══ */}
         {tab==="records" && (
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {/* Search + filters */}
             <div className="card" style={{padding:12}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",
@@ -1564,18 +1807,26 @@ function AppContent({ session, onLogout }) {
                     <X size={13}/>
                   </button>}
                 </div>
-                {/* Botón exportar CSV */}
+                {/* Botón exportar CSV mejorado (incluye Tipo real, Fijo auto-detectado y Parte Propia) */}
                 <button onClick={()=>{
-                  const header = ["Fecha","Tipo","Descripción","Categoría","Monto","Billetera","Fijo"];
-                  const rows = filtered.map(tx=>[
-                    tx.date,
-                    tx.type==="income"?"Ingreso":"Gasto",
-                    `"${(tx.description||"").replace(/"/g,'""')}"`,
-                    tx.category||"",
-                    tx.type==="income"?tx.amount:-tx.amount,
-                    tx.wallet==="manual"?"Efectivo":(ARG_BANKS.find(b=>b.id===tx.wallet)?.name||tx.wallet||"Efectivo"),
-                    tx.recurring?"Sí":"No",
-                  ]);
+                  const header = ["Fecha","Tipo","Descripción","Categoría","Monto Caja","Consumo Real","Billetera","Fijo"];
+                  const rows = filtered.map(tx => {
+                    const isTrans = isInternalTransfer(tx);
+                    const isInv   = isInvestmentTx(tx);
+                    const tipoStr = isTrans ? "Transferencia" : isInv ? "Inversión" : tx.type==="income" ? "Ingreso" : "Gasto";
+                    const signedAmt = tx.type==="income" ? tx.amount : -tx.amount;
+                    const realCons  = (tx.type==="expense" && !isTrans && !isInv) ? -getEffectiveExpense(tx) : 0;
+                    return [
+                      tx.date,
+                      tipoStr,
+                      `"${(tx.description||"").replace(/"/g,'""')}"`,
+                      tx.category||"",
+                      signedAmt,
+                      realCons,
+                      (tx.wallet==="manual"||tx.source==="cash")?"Efectivo":(ARG_BANKS.find(b=>b.id===tx.wallet)?.name||tx.wallet||"Efectivo"),
+                      isAutoFixedTx(tx) ? "Sí" : "No",
+                    ];
+                  });
                   const csv = [header,...rows].map(r=>r.join(",")).join("\n");
                   const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
                   const url = URL.createObjectURL(blob);
@@ -1587,20 +1838,25 @@ function AppContent({ session, onLogout }) {
                   style={{display:"flex",alignItems:"center",gap:7,padding:"9px 14px",borderRadius:10,
                     background:"rgba(99,102,241,.12)",border:"1px solid rgba(99,102,241,.25)",
                     color:"#818CF8",cursor:"pointer",fontSize:12,fontWeight:600,
-                    fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0,transition:"all .2s"}}
-                  onMouseEnter={e=>e.currentTarget.style.background="rgba(99,102,241,.22)"}
-                  onMouseLeave={e=>e.currentTarget.style.background="rgba(99,102,241,.12)"}>
+                    fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0,transition:"all .2s"}}>
                   <Download size={14}/>
                   Exportar CSV
                 </button>
               </div>
-              {/* Type filters */}
-              <div style={{display:"flex",gap:5,marginBottom:8}}>
-                {[["all","Todos","#818CF8"],["income","Ingresos","#34D399"],
-                  ["expense","Gastos","#F472B6"],["recurring","📅 Fijos","#FBBF24"]].map(([val,label,color])=>(
+              {/* Type filters ampliados */}
+              <div style={{display:"flex",gap:5,marginBottom:8,overflowX:"auto",paddingBottom:2}}>
+                {[
+                  ["all","Todos","#818CF8"],
+                  ["income","Ingresos","#34D399"],
+                  ["expense","Gastos","#F472B6"],
+                  ["investment","📈 Inversión","#A78BFA"],
+                  ["transfer","⇄ Pases","#38BDF8"],
+                  ["recurring","📅 Fijos","#FBBF24"],
+                  ["split","👥 Compartidos","#38BDF8"],
+                ].map(([val,label,color])=>(
                   <button key={val} onClick={()=>setFilterType(val)}
-                    style={{flex:1,padding:"7px 4px",borderRadius:9,fontSize:12,fontWeight:600,
-                      border:"none",cursor:"pointer",fontFamily:"inherit",transition:"all .2s",
+                    style={{flex:1,padding:"7px 8px",borderRadius:9,fontSize:11,fontWeight:700,
+                      border:"none",cursor:"pointer",fontFamily:"inherit",transition:"all .2s",whiteSpace:"nowrap",
                       background:filterType===val?color+"22":"none",
                       color:filterType===val?color:"#475569"}}>
                     {label}
@@ -1633,7 +1889,6 @@ function AppContent({ session, onLogout }) {
               {filterCat!=="all" && <> · categoría "<span style={{color:"#818CF8"}}>{filterCat}</span>"</>}
             </p>
 
-            {/* Grouped by date with swipe-to-delete */}
             {filtered.length===0 ? (
               <div className="card" style={{textAlign:"center",padding:"48px 0",color:"#475569"}}>
                 <List size={32} style={{margin:"0 auto 10px",opacity:.2}}/>
@@ -1645,10 +1900,13 @@ function AppContent({ session, onLogout }) {
               const sortedDates = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
               return sortedDates.map(date=>{
                 const dayTxs = groups[date];
-                const dayNet = dayTxs.reduce((s,t)=>t.type==="income"?s+t.amount:s-t.amount, 0);
+                // Balance diario sin distorsión por pases internos
+                const dayNet = dayTxs.reduce((s,t) => {
+                  if (isInternalTransfer(t)) return s;
+                  return t.type==="income" ? s + t.amount : s - t.amount;
+                }, 0);
                 return (
                   <div key={date}>
-                    {/* Date separator with NET balance */}
                     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,marginTop:4}}>
                       <div style={{height:1,flex:1,background:"linear-gradient(to right,#1E293B,transparent)"}}/>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
@@ -1666,16 +1924,20 @@ function AppContent({ session, onLogout }) {
 
                     <div className="card" style={{padding:0,overflow:"hidden"}}>
                       {dayTxs.map(tx=>{
-                        const src = sourceLabel(tx);
+                        const src     = sourceLabel(tx);
+                        const isTrans = isInternalTransfer(tx);
+                        const isInv   = isInvestmentTx(tx);
+                        const isFixed = isAutoFixedTx(tx);
+                        const split   = parseSplitInfo(tx);
                         return (
                           <div key={tx.id} className="tx-wrap" style={{borderBottom:"1px solid #1E293B"}}>
                             <SwipeableRow id={tx.id} onDeleteRequest={confirmDelete}>
                               <div className="tx-row">
-                                <TxIcon cat={tx.category}/>
+                                <TxIcon tx={tx}/>
                                 <div style={{flex:1,minWidth:0}}>
                                   <p style={{fontSize:13,fontWeight:600,overflow:"hidden",
                                       textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                    {tx.description}
+                                    {split ? split.cleanDesc : tx.description}
                                   </p>
                                   <div style={{display:"flex",alignItems:"center",gap:5,marginTop:3,flexWrap:"wrap"}}>
                                     <span style={{fontSize:11,color:"#64748B"}}>{tx.category}</span>
@@ -1685,21 +1947,41 @@ function AppContent({ session, onLogout }) {
                                         border:`1px solid ${src.color}28`}}>
                                       {src.icon} {src.text}
                                     </span>
-                                    {tx.recurring && (
+                                    {isTrans && (
+                                      <span style={{fontSize:10,fontWeight:700,color:"#38BDF8",
+                                          background:"rgba(56,189,248,.1)",borderRadius:6,padding:"1px 6px",
+                                          border:"1px solid rgba(56,189,248,.25)"}}>
+                                        ⇄ pase entre cuentas
+                                      </span>
+                                    )}
+                                    {isInv && (
+                                      <span style={{fontSize:10,fontWeight:700,color:"#A78BFA",
+                                          background:"rgba(167,139,250,.12)",borderRadius:6,padding:"1px 6px",
+                                          border:"1px solid rgba(167,139,250,.25)"}}>
+                                        📈 inversión
+                                      </span>
+                                    )}
+                                    {isFixed && (
                                       <span style={{fontSize:10,fontWeight:600,color:"#FBBF24",
                                           background:"rgba(251,191,36,.1)",borderRadius:6,padding:"1px 6px",
                                           border:"1px solid rgba(251,191,36,.2)"}}>
                                         📅 fijo{tx.dueDay?` · día ${tx.dueDay}`:""}
                                       </span>
                                     )}
+                                    {split && (
+                                      <span style={{fontSize:10,fontWeight:700,color:"#38BDF8",
+                                          background:"rgba(56,189,248,.12)",borderRadius:6,padding:"1px 6px",
+                                          border:"1px solid rgba(56,189,248,.25)"}}>
+                                        👥 Tu parte: {fARS(split.myShare)} · Te deben: {fARS(split.owed)}
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                                 <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                                   <span style={{fontSize:13,fontWeight:700,
-                                      color:tx.type==="income"?"#34D399":"#F472B6"}}>
+                                      color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
                                     {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
                                   </span>
-                                  {/* Desktop delete button (hover) */}
                                   <button className="tx-del-btn" onClick={()=>confirmDelete(tx.id)}
                                     style={{background:"none",border:"none",cursor:"pointer",
                                         color:"#334155",padding:"4px",borderRadius:6,display:"flex"}}>
@@ -1774,23 +2056,12 @@ function AppContent({ session, onLogout }) {
                 ))}
               </div>
             ))}
-            <div className="card" style={{borderColor:"rgba(251,191,36,.2)",background:"rgba(251,191,36,.04)"}}>
-              <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                <Shield size={15} color="#FBBF24" style={{marginTop:2,flexShrink:0}}/>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:"#FCD34D",marginBottom:5}}>Seguridad</p>
-                  <p style={{fontSize:11,color:"#94A3B8",lineHeight:1.7}}>
-                    Jamás expongas tokens en el frontend. Variables de entorno y backend propio siempre.
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         )}
       </main>
 
       {/* FAB */}
-      <button onClick={()=>setShowModal(true)} className="grad-fab"
+      <button onClick={() => { setForm(getInitialForm("expense")); setShowModal(true); }} className="grad-fab"
         style={{position:"fixed",bottom:24,right:20,width:56,height:56,borderRadius:16,
           border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
           zIndex:40,transition:"transform .15s"}}
@@ -1806,6 +2077,42 @@ function AppContent({ session, onLogout }) {
           border:`1px solid ${toast.ok?"rgba(52,211,153,.3)":"rgba(244,114,182,.3)"}`,
           color:toast.ok?"#34D399":"#F472B6"}}>
           {toast.msg}
+        </div>
+      )}
+
+      {/* MODAL PARA SALDAR DEUDA ("ME DEBEN") */}
+      {settleModalTx && (
+        <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setSettleModalTx(null);}}>
+          <div className="glass-hi fade-in" style={{width:"100%",maxWidth:380,borderRadius:20,padding:24}}>
+            <h3 style={{fontSize:16,fontWeight:800,marginBottom:6}}>Saldar cobro pendiente</h3>
+            <p style={{fontSize:12,color:"#94A3B8",marginBottom:16,lineHeight:1.5}}>
+              ¿En qué billetera te transfirió o pagó <b style={{color:"#38BDF8"}}>{settleModalTx.debtors}</b> los{" "}
+              <b style={{color:"#34D399"}}>{fARS(settleModalTx.owed)}</b> de <i>"{settleModalTx.cleanDesc}"</i>?
+            </p>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+              {connectedIds.map(id => {
+                const bank = getBank(id); if(!bank) return null;
+                return (
+                  <button key={id}
+                    onClick={() => handleSettleSplit(settleModalTx, id)}
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                      padding:"11px 14px",borderRadius:12,background:"#1E293B",
+                      border:"1px solid #334155",color:"#F1F5F9",cursor:"pointer",fontFamily:"inherit"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <BankBadge id={id} size={28}/>
+                      <span style={{fontSize:13,fontWeight:700}}>{bank.name}</span>
+                    </div>
+                    <span style={{fontSize:12,color:"#34D399",fontWeight:700}}>+{fARS(settleModalTx.owed)} →</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={()=>setSettleModalTx(null)}
+              style={{width:"100%",padding:"11px",borderRadius:12,fontSize:13,fontWeight:600,
+                background:"none",border:"1px solid #334155",color:"#94A3B8",cursor:"pointer",fontFamily:"inherit"}}>
+              Cancelar
+            </button>
+          </div>
         </div>
       )}
 
@@ -1878,12 +2185,12 @@ function AppContent({ session, onLogout }) {
         </div>
       )}
 
-      {/* ADD TX MODAL */}
+      {/* ADD TX MODAL (CON LAS 4 MEJORAS INTEGRADAS) */}
       {showModal && (
         <div className="overlay" onClick={e=>{if(e.target===e.currentTarget)setShowModal(false);}}>
           <div className="glass-hi fade-in"
-            style={{width:"100%",maxWidth:540,borderRadius:22,padding:24,maxHeight:"90vh",overflowY:"auto"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+            style={{width:"100%",maxWidth:540,borderRadius:22,padding:24,maxHeight:"92vh",overflowY:"auto"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
               <h2 style={{fontSize:18,fontWeight:800,letterSpacing:"-.3px"}}>Nuevo Movimiento</h2>
               <button onClick={()=>setShowModal(false)}
                 style={{width:32,height:32,borderRadius:9,background:"#1E293B",border:"none",cursor:"pointer",
@@ -1892,22 +2199,31 @@ function AppContent({ session, onLogout }) {
               </button>
             </div>
 
-            {/* Expense / Income toggle */}
+            {/* MEJORA 1: 4 Tipos de Movimiento (Gasto / Ingreso / Inversión / Transferir) */}
             <div className="pill" style={{marginBottom:18}}>
-              {[["expense","Gasto","#DC2626","#BE123C"],["income","Ingreso","#059669","#047857"]].map(
-                ([val,label,c1,c2])=>(
-                  <button key={val} className="pill-o"
-                    onClick={()=>setForm(f=>({...f,type:val,category:val==="expense"?"Alimentación":"Sueldo",recurring:false,dueDay:""}))}
-                    style={form.type===val?{background:`linear-gradient(135deg,${c1},${c2})`,color:"#fff"}:{}}>
-                    {label}
-                  </button>
-                )
-              )}
+              {[
+                ["expense",    "Gasto",      "#DC2626", "#BE123C"],
+                ["income",     "Ingreso",    "#059669", "#047857"],
+                ["investment", "Inversión",  "#7C3AED", "#6D28D9"],
+                ["transfer",   "Transferir", "#0284C7", "#0369A1"],
+              ].map(([val,label,c1,c2])=>(
+                <button key={val} className="pill-o"
+                  onClick={()=>setForm(f=>({
+                    ...getInitialForm(val),
+                    amount: f.amount,
+                    date: f.date,
+                  }))}
+                  style={form.type===val?{background:`linear-gradient(135deg,${c1},${c2})`,color:"#fff"}:{}}>
+                  {label}
+                </button>
+              ))}
             </div>
 
             {/* Amount */}
             <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>MONTO (ARS)</label>
+              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                {form.type==="transfer" ? "MONTO A TRANSFERIR (ARS)" : form.type==="investment" ? "MONTO A INVERTIR (ARS)" : "MONTO TOTAL (ARS)"}
+              </label>
               <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",borderRadius:12,
                   padding:"10px 12px 10px 16px",border:`1px solid ${form.amount?"#6366F1":"#334155"}`,
                   transition:"border-color .2s"}}>
@@ -1924,11 +2240,10 @@ function AppContent({ session, onLogout }) {
                   style={{background:"none",border:"none",outline:"none",flex:1,
                       fontSize:28,fontWeight:800,color:"#F1F5F9",fontFamily:"inherit",
                       width:"100%",minWidth:0}}/>
-                {/* Custom chevron buttons */}
                 <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
                   {[
-                    { dir: 1,  step: 100, path: "M6 9 L10 5 L14 9" },
-                    { dir: -1, step: 100, path: "M6 7 L10 11 L14 7" },
+                    { dir: 1,  step: 1000, path: "M6 9 L10 5 L14 9" },
+                    { dir: -1, step: 1000, path: "M6 7 L10 11 L14 7" },
                   ].map(({dir, step, path}) => (
                     <button
                       key={dir}
@@ -1946,13 +2261,8 @@ function AppContent({ session, onLogout }) {
                         background: "linear-gradient(135deg,#6366F1,#8B5CF6)",
                         border: "none", cursor: "pointer", padding: 0,
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        flexShrink: 0, transition: "opacity .15s, transform .15s",
-                        boxShadow: "0 2px 8px rgba(99,102,241,.4)",
-                      }}
-                      onMouseEnter={e=>{e.currentTarget.style.opacity=".85"; e.currentTarget.style.transform="scale(1.08)";}}
-                      onMouseLeave={e=>{e.currentTarget.style.opacity="1";   e.currentTarget.style.transform="scale(1)";}}
-                      onMouseUp={e=>{e.currentTarget.style.transform="scale(1)";}}
-                    >
+                        flexShrink: 0,
+                      }}>
                       <svg width="14" height="14" viewBox="0 0 20 16" fill="none"
                            stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d={path}/>
@@ -1961,165 +2271,330 @@ function AppContent({ session, onLogout }) {
                   ))}
                 </div>
               </div>
-              <p style={{fontSize:10,color:"#475569",marginTop:5,paddingLeft:2}}>
-                Los botones suman/restan $100 · o escribí el monto directo
-              </p>
             </div>
 
-            {/* Description */}
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>DESCRIPCIÓN</label>
-              <input className="input-fc" value={form.description}
-                onChange={e=>setForm(f=>({...f,description:e.target.value}))}
-                placeholder="¿En qué gastaste o de dónde viene?"/>
-            </div>
-
-            {/* Category */}
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>CATEGORÍA</label>
-              <select className="input-fc" value={form.category}
-                onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-                {(form.type==="expense"?EXPENSE_CATS:INCOME_CATS).map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-
-            {/* Date + Source */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:form.source==="digital"?10:20}}>
-              <div>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FECHA</label>
-                <input type="date" className="input-fc" value={form.date}
-                  onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
-              </div>
-              <div>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FUENTE</label>
-                <div className="pill" style={{padding:3}}>
-                  {[["cash","💵 Efec.","#34D399"],["digital","💳 Dig.","#60A5FA"]].map(([val,ico,col])=>(
-                    <button key={val} className="pill-o"
-                      onClick={()=>{
-                        const firstDigital = connectedIds.find(id=>id!=="efectivo")||"mercadopago";
-                        setForm(f=>({...f,source:val,wallet:val==="cash"?"manual":firstDigital}));
-                      }}
-                      style={{...(form.source===val?{background:col+"22",color:col}:{}),fontSize:12}}>
-                      {ico}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Digital wallet picker — chips de billeteras conectadas */}
-            {form.source==="digital" && (
-              <div style={{marginBottom:14,animation:"fu .2s ease-out both"}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
-                  BILLETERA
-                </label>
-                {connectedIds.filter(id=>id!=="efectivo").length === 0 ? (
-                  <div style={{padding:"12px 16px",borderRadius:12,background:"#1E293B",
-                      border:"1px solid #334155",textAlign:"center"}}>
-                    <p style={{fontSize:12,color:"#64748B",marginBottom:6}}>Sin billeteras digitales conectadas</p>
-                    <button onClick={()=>{setShowModal(false);setShowBanks(true);}}
-                      style={{fontSize:12,fontWeight:600,color:"#818CF8",background:"none",
-                        border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
-                      Conectar billeteras
-                    </button>
+            {/* ── UI EXCLUSIVA PARA TRANSFERENCIA ENTRE BILLETERAS (Mejora 1) ── */}
+            {form.type === "transfer" ? (
+              <>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+                  <div>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                      DESDE (ORIGEN)
+                    </label>
+                    <select className="input-fc" value={form.fromWallet}
+                      onChange={e=>setForm(f=>({...f,fromWallet:e.target.value}))}>
+                      {connectedIds.map(id => {
+                        const b = getBank(id);
+                        return <option key={id} value={id}>{b?.name || id} ({fARS(walletBalance(id))})</option>;
+                      })}
+                    </select>
                   </div>
-                ) : (
-                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                    {connectedIds.filter(id=>id!=="efectivo").map(id=>{
-                      const bank = getBank(id); if(!bank) return null;
-                      const wBal  = walletBalance(id);
-                      const req   = parseFloat(form.amount)||0;
-                      const insuf = form.type==="expense"&&req>0&&wBal<req;
-                      const sel   = form.wallet===id;
-                      return (
-                        <button key={id} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:id})); }}
-                          style={{display:"flex",alignItems:"center",gap:8,padding:"9px 13px",
-                            borderRadius:12,border:`2px solid ${insuf?"#1E293B":sel?bank.color:"#334155"}`,
-                            background:insuf?"#0F172A":sel?bank.color+"15":"#1E293B",
-                            cursor:insuf?"not-allowed":"pointer",opacity:insuf?.4:1,
-                            fontFamily:"inherit",transition:"all .2s"}}>
-                          <BankBadge id={id} size={24}/>
-                          <div style={{textAlign:"left"}}>
-                            <p style={{fontSize:12,fontWeight:700,color:insuf?"#334155":sel?bank.color:"#94A3B8"}}>
-                              {bank.name}
-                            </p>
-                            <p style={{fontSize:10,color:insuf?"#334155":wBal>0?"#34D399":"#64748B",fontWeight:600}}>
-                              {wBal>=0?"+":""}{fARS(wBal)}
-                              {insuf&&<span style={{color:"#F472B6"}}> · sin saldo</span>}
-                            </p>
-                          </div>
+                  <div>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                      HACIA (DESTINO)
+                    </label>
+                    <select className="input-fc" value={form.toWallet}
+                      onChange={e=>setForm(f=>({...f,toWallet:e.target.value}))}>
+                      {connectedIds.map(id => {
+                        const b = getBank(id);
+                        return <option key={id} value={id}>{b?.name || id} ({fARS(walletBalance(id))})</option>;
+                      })}
+                    </select>
+                  </div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                    NOTA OPCIONAL
+                  </label>
+                  <input className="input-fc" value={form.description}
+                    onChange={e=>setForm(f=>({...f,description:e.target.value}))}
+                    placeholder="Ej: Fondeo semanal Lemon Cash"/>
+                </div>
+                <div style={{marginBottom:18}}>
+                  <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FECHA</label>
+                  <input type="date" className="input-fc" value={form.date}
+                    onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Description (con auto-detección de fijo mensual al escribir) */}
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                    DESCRIPCIÓN
+                  </label>
+                  <input className="input-fc" value={form.description}
+                    onChange={e => handleDescriptionChange(e.target.value)}
+                    placeholder={
+                      form.type==="investment"
+                        ? "Ej: Compra CEDEARs Bull Market / USDT"
+                        : "¿En qué gastaste o de dónde viene?"
+                    }/>
+                </div>
+
+                {/* MEJORA 2: Categoría SIN valor por defecto y con validación obligatoria */}
+                <div style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600}}>CATEGORÍA *</label>
+                    {!form.category && (
+                      <span style={{fontSize:10,color:"#FBBF24",fontWeight:600}}>
+                        Obligatorio elegir una
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    className="input-fc"
+                    value={form.category}
+                    onChange={e => {
+                      const cat = e.target.value;
+                      // Si elige Servicios o Salud y contiene palabra fija, sugerir fijo
+                      setForm(f => ({ ...f, category: cat }));
+                    }}
+                    style={{
+                      borderColor: !form.category ? "rgba(251,191,36,.45)" : "#334155",
+                      color: !form.category ? "#94A3B8" : "#F1F5F9",
+                    }}>
+                    <option value="" disabled>Seleccionar categoría…</option>
+                    {(form.type==="expense"
+                      ? EXPENSE_CATS
+                      : form.type==="investment"
+                      ? INVESTMENT_CATS
+                      : INCOME_CATS
+                    ).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                {/* Date + Source */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:form.source==="digital"?10:16}}>
+                  <div>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FECHA</label>
+                    <input type="date" className="input-fc" value={form.date}
+                      onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>FUENTE</label>
+                    <div className="pill" style={{padding:3}}>
+                      {[["cash","💵 Efec.","#34D399"],["digital","💳 Dig.","#60A5FA"]].map(([val,ico,col])=>(
+                        <button key={val} className="pill-o"
+                          onClick={()=>{
+                            const firstDigital = connectedIds.find(id=>id!=="efectivo")||"lemoncash";
+                            setForm(f=>({...f,source:val,wallet:val==="cash"?"manual":firstDigital}));
+                          }}
+                          style={{...(form.source===val?{background:col+"22",color:col}:{}),fontSize:12}}>
+                          {ico}
                         </button>
-                      );
-                    })}
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Digital wallet picker */}
+                {form.source==="digital" && (
+                  <div style={{marginBottom:14,animation:"fu .2s ease-out both"}}>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
+                      BILLETERA
+                    </label>
+                    {connectedIds.filter(id=>id!=="efectivo").length === 0 ? (
+                      <div style={{padding:"12px 16px",borderRadius:12,background:"#1E293B",
+                          border:"1px solid #334155",textAlign:"center"}}>
+                        <p style={{fontSize:12,color:"#64748B",marginBottom:6}}>Sin billeteras digitales conectadas</p>
+                        <button onClick={()=>{setShowModal(false);setShowBanks(true);}}
+                          style={{fontSize:12,fontWeight:600,color:"#818CF8",background:"none",
+                            border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
+                          Conectar billeteras
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {connectedIds.filter(id=>id!=="efectivo").map(id=>{
+                          const bank = getBank(id); if(!bank) return null;
+                          const wBal  = walletBalance(id);
+                          const req   = parseFloat(form.amount)||0;
+                          const insuf = (form.type==="expense"||form.type==="investment")&&req>0&&wBal<req;
+                          const sel   = form.wallet===id;
+                          return (
+                            <button key={id} onClick={()=>{ if(!insuf) setForm(f=>({...f,wallet:id})); }}
+                              style={{display:"flex",alignItems:"center",gap:8,padding:"9px 13px",
+                                borderRadius:12,border:`2px solid ${insuf?"#1E293B":sel?bank.color:"#334155"}`,
+                                background:insuf?"#0F172A":sel?bank.color+"15":"#1E293B",
+                                cursor:insuf?"not-allowed":"pointer",opacity:insuf?.4:1,
+                                fontFamily:"inherit",transition:"all .2s"}}>
+                              <BankBadge id={id} size={24}/>
+                              <div style={{textAlign:"left"}}>
+                                <p style={{fontSize:12,fontWeight:700,color:insuf?"#334155":sel?bank.color:"#94A3B8"}}>
+                                  {bank.name}
+                                </p>
+                                <p style={{fontSize:10,color:insuf?"#334155":wBal>0?"#34D399":"#64748B",fontWeight:600}}>
+                                  {wBal>=0?"+":""}{fARS(wBal)}
+                                  {insuf&&<span style={{color:"#F472B6"}}> · sin saldo</span>}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Recurring toggle (expenses only) */}
-            {form.type==="expense" && (
-              <div style={{marginBottom: form.recurring ? 14 : 20}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:8}}>
-                  ¿QUÉ TIPO DE GASTO ES?
-                </label>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[{val:false,label:"Puntual",sub:"Compra, café, salida…",icon:"🛒",color:"#818CF8"},
-                    {val:true, label:"Fijo mensual",sub:"Alquiler, seguro, wifi…",icon:"📅",color:"#FBBF24"}].map(
-                    ({val,label,sub,icon,color})=>(
-                      <button key={String(val)} onClick={()=>setForm(f=>({...f,recurring:val,dueDay:val?f.dueDay:""}))}
-                        style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:4,
-                          padding:"11px 13px",borderRadius:13,border:"2px solid",cursor:"pointer",
-                          fontFamily:"inherit",background:"none",transition:"all .2s",textAlign:"left",
-                          borderColor:form.recurring===val?color:"#1E293B",
-                          background:form.recurring===val?color+"12":"#1E293B"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:6}}>
-                          <span style={{fontSize:14}}>{icon}</span>
-                          <span style={{fontSize:12,fontWeight:700,color:form.recurring===val?color:"#94A3B8"}}>{label}</span>
+                {/* MEJORA 4: Modo "Dividir cuenta / Me deben" (solo en Gastos) */}
+                {form.type === "expense" && (
+                  <div style={{marginBottom:14,padding:12,borderRadius:13,
+                      background: form.isSplit ? "rgba(56,189,248,.08)" : "#1E293B",
+                      border: `1px solid ${form.isSplit ? "rgba(56,189,248,.35)" : "#334155"}`}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                        cursor:"pointer"}}
+                        onClick={() => setForm(f => {
+                          const nextSplit = !f.isSplit;
+                          const half = f.amount ? String(Math.round(parseFloat(f.amount)/2)) : "";
+                          return { ...f, isSplit: nextSplit, myShare: nextSplit ? half : "" };
+                        })}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <Users size={15} color={form.isSplit ? "#38BDF8" : "#64748B"}/>
+                        <div>
+                          <p style={{fontSize:12,fontWeight:700,color:form.isSplit?"#38BDF8":"#CBD5E1"}}>
+                            Dividir cuenta / Me deben
+                          </p>
+                          <p style={{fontSize:10,color:"#64748B"}}>
+                            Descontá el total de tu billetera pero registrá solo tu parte como gasto
+                          </p>
                         </div>
-                        <span style={{fontSize:10,color:form.recurring===val?color+"BB":"#475569"}}>{sub}</span>
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-            )}
+                      </div>
+                      <input type="checkbox" checked={form.isSplit} readOnly
+                        style={{accentColor:"#38BDF8",width:16,height:16,cursor:"pointer"}}/>
+                    </div>
 
-            {/* Due day — only when recurring */}
-            {form.type==="expense" && form.recurring && (
-              <div style={{marginBottom:20,animation:"fu .2s ease-out both"}}>
-                <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
-                  ¿QUÉ DÍA DEL MES VENCE?{" "}
-                  <span style={{color:"#475569",fontWeight:400}}>(opcional)</span>
-                </label>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",borderRadius:12,
-                      padding:"11px 16px",border:`1px solid ${form.dueDay?"#FBBF24":"#334155"}`,flex:1}}>
-                    <Calendar size={14} color="#FBBF24"/>
-                    <input type="number" min="1" max="31" value={form.dueDay}
-                      onChange={e=>setForm(f=>({...f,dueDay:e.target.value}))}
-                      placeholder="Ej: 5"
-                      style={{background:"none",border:"none",outline:"none",flex:1,
-                          fontSize:14,color:"#F1F5F9",fontFamily:"inherit",width:"100%"}}/>
-                    {form.dueDay && <span style={{fontSize:12,color:"#64748B",whiteSpace:"nowrap"}}>de cada mes</span>}
+                    {form.isSplit && (
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:12,
+                          paddingTop:12,borderTop:"1px solid rgba(56,189,248,.2)"}}>
+                        <div>
+                          <label style={{fontSize:10,color:"#38BDF8",fontWeight:700,display:"block",marginBottom:4}}>
+                            TU PARTE REAL ($)
+                          </label>
+                          <input
+                            type="number"
+                            className="input-fc"
+                            value={form.myShare}
+                            onChange={e => setForm(f => ({ ...f, myShare: e.target.value }))}
+                            placeholder="Ej: 29500"
+                            style={{padding:"9px 12px",fontSize:13}}
+                          />
+                        </div>
+                        <div>
+                          <label style={{fontSize:10,color:"#38BDF8",fontWeight:700,display:"block",marginBottom:4}}>
+                            ¿QUIÉN TE DEBE?
+                          </label>
+                          <input
+                            type="text"
+                            className="input-fc"
+                            value={form.splitWith}
+                            onChange={e => setForm(f => ({ ...f, splitWith: e.target.value }))}
+                            placeholder="Ej: Facu, Luzzi"
+                            style={{padding:"9px 12px",fontSize:13}}
+                          />
+                        </div>
+                        {parseFloat(form.amount) > 0 && (
+                          <div style={{gridColumn:"1 / -1",fontSize:11,color:"#94A3B8",
+                              display:"flex",justifyContent:"space-between",padding:"4px 2px 0"}}>
+                            <span>Tu consumo: <b style={{color:"#F1F5F9"}}>{fARS(parseFloat(form.myShare)||0)}</b></span>
+                            <span>Queda por cobrar: <b style={{color:"#38BDF8"}}>
+                              {fARS(Math.max(0, (parseFloat(form.amount)||0) - (parseFloat(form.myShare)||0)))}
+                            </b></span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-                <p style={{fontSize:11,color:"#64748B",marginTop:6}}>
-                  📍 Te avisamos cuando vence en los próximos 7 días
-                </p>
-              </div>
+                )}
+
+                {/* MEJORA 3: Recurring toggle con badge de auto-detectado */}
+                {form.type==="expense" && (
+                  <div style={{marginBottom: form.recurring ? 14 : 20}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                      <label style={{fontSize:11,color:"#64748B",fontWeight:600}}>
+                        ¿QUÉ TIPO DE GASTO ES?
+                      </label>
+                      {form.autoRecurringDetected && form.recurring && (
+                        <span style={{fontSize:10,color:"#FBBF24",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                          <Sparkles size={11}/> Auto-detectado como fijo
+                        </span>
+                      )}
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      {[{val:false,label:"Puntual",sub:"Compra, café, salida…",icon:"🛒",color:"#818CF8"},
+                        {val:true, label:"Fijo mensual",sub:"Calistenia, cuotas, HBO…",icon:"📅",color:"#FBBF24"}].map(
+                        ({val,label,sub,icon,color})=>(
+                          <button key={String(val)}
+                            onClick={()=>setForm(f=>({...f,recurring:val,autoRecurringDetected:false,dueDay:val?f.dueDay:""}))}
+                            style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:4,
+                              padding:"11px 13px",borderRadius:13,border:"2px solid",cursor:"pointer",
+                              fontFamily:"inherit",transition:"all .2s",textAlign:"left",
+                              borderColor:form.recurring===val?color:"#1E293B",
+                              background:form.recurring===val?color+"12":"#1E293B"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontSize:14}}>{icon}</span>
+                              <span style={{fontSize:12,fontWeight:700,color:form.recurring===val?color:"#94A3B8"}}>{label}</span>
+                            </div>
+                            <span style={{fontSize:10,color:form.recurring===val?color+"BB":"#475569"}}>{sub}</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {form.type==="expense" && form.recurring && (
+                  <div style={{marginBottom:20,animation:"fu .2s ease-out both"}}>
+                    <label style={{fontSize:11,color:"#64748B",fontWeight:600,display:"block",marginBottom:6}}>
+                      ¿QUÉ DÍA DEL MES VENCE?{" "}
+                      <span style={{color:"#475569",fontWeight:400}}>(opcional)</span>
+                    </label>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,background:"#1E293B",borderRadius:12,
+                          padding:"11px 16px",border:`1px solid ${form.dueDay?"#FBBF24":"#334155"}`,flex:1}}>
+                        <Calendar size={14} color="#FBBF24"/>
+                        <input type="number" min="1" max="31" value={form.dueDay}
+                          onChange={e=>setForm(f=>({...f,dueDay:e.target.value}))}
+                          placeholder="Ej: 5"
+                          style={{background:"none",border:"none",outline:"none",flex:1,
+                              fontSize:14,color:"#F1F5F9",fontFamily:"inherit",width:"100%"}}/>
+                        {form.dueDay && <span style={{fontSize:12,color:"#64748B",whiteSpace:"nowrap"}}>de cada mes</span>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Submit */}
+            {/* Submit con validaciones claras */}
             <button className="btn-p" onClick={addTx}
-              disabled={!form.amount||!form.description||
-                (form.type==="expense"&&form.source==="digital"&&
-                 parseFloat(form.amount)>0&&walletBalance(form.wallet)<parseFloat(form.amount))}
-              style={{background:form.type==="expense"
-                ?"linear-gradient(135deg,#DC2626,#BE123C)"
-                :"linear-gradient(135deg,#059669,#047857)"}}>
-              {form.type==="expense"&&form.source==="digital"&&
-               parseFloat(form.amount)>0&&walletBalance(form.wallet)<parseFloat(form.amount)
-                ?"Saldo insuficiente":"Guardar Movimiento"}
+              disabled={
+                !form.amount ||
+                parseFloat(form.amount) <= 0 ||
+                (form.type === "transfer" && form.fromWallet === form.toWallet) ||
+                (form.type !== "transfer" && (!form.description.trim() || !form.category)) ||
+                ((form.type === "expense" || form.type === "investment") && form.source === "digital" &&
+                 parseFloat(form.amount) > 0 && walletBalance(form.wallet) < parseFloat(form.amount))
+              }
+              style={{
+                background: form.type === "expense"
+                  ? "linear-gradient(135deg,#DC2626,#BE123C)"
+                  : form.type === "income"
+                  ? "linear-gradient(135deg,#059669,#047857)"
+                  : form.type === "investment"
+                  ? "linear-gradient(135deg,#7C3AED,#6D28D9)"
+                  : "linear-gradient(135deg,#0284C7,#0369A1)"
+              }}>
+              {(form.type === "expense" || form.type === "investment") && form.source === "digital" &&
+               parseFloat(form.amount) > 0 && walletBalance(form.wallet) < parseFloat(form.amount)
+                ? "Saldo insuficiente en billetera"
+                : form.type !== "transfer" && !form.category
+                ? "Seleccioná una categoría para continuar"
+                : form.type === "transfer"
+                ? "Confirmar Transferencia"
+                : form.type === "investment"
+                ? "Registrar Inversión"
+                : "Guardar Movimiento"}
             </button>
           </div>
         </div>
