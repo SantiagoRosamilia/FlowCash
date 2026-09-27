@@ -27,7 +27,6 @@ const FIXED_OVERRIDE_KEY = 'fc_fixed_overrides_v1';
 const loadSettled = () => JSON.parse(localStorage.getItem(SETTLED_KEY) || '[]');
 const saveSettled = ids => localStorage.setItem(SETTLED_KEY, JSON.stringify(ids));
 
-// Guarda decisiones manuales del usuario: { [txId]: { mode: 'one-off' | 'fixed' | 'installments', currentInst, totalInst } }
 const loadFixedOverrides = () => JSON.parse(localStorage.getItem(FIXED_OVERRIDE_KEY) || '{}');
 const saveFixedOverrides = map => localStorage.setItem(FIXED_OVERRIDE_KEY, JSON.stringify(map));
 
@@ -143,7 +142,6 @@ const isInvestmentTx = tx => {
   return false;
 };
 
-// Detecta si la descripción tiene etiqueta de cuotas: [Cuota 2/3] o texto como "cuotas mes 2"
 const parseInstallmentInfo = (tx, overridesMap = {}) => {
   const ov = overridesMap[tx.id];
   if (ov && ov.mode === "installments") {
@@ -161,22 +159,19 @@ const parseInstallmentInfo = (tx, overridesMap = {}) => {
   return null;
 };
 
-// Verifica si un gasto en cuotas sigue vigente en el mes actual o ya terminó
 const isInstallmentStillActive = (tx, instInfo, refDate = new Date()) => {
   if (!instInfo) return true;
   const txDate = new Date(tx.date + "T00:00:00");
   const monthsElapsed = (refDate.getFullYear() - txDate.getFullYear()) * 12 + (refDate.getMonth() - txDate.getMonth());
   const remainingAfterTxMonth = instInfo.total - instInfo.current;
-  // Si los meses que pasaron desde que se anotó esa cuota superan las cuotas que quedaban, ya venció
   return monthsElapsed <= remainingAfterTxMonth;
 };
 
-// Determina si un gasto es Fijo (respetando si el usuario le quitó el "fijo" manualmente o si es cuota vencida)
 const isEffectiveFixedTx = (tx, overridesMap = {}, refDate = new Date()) => {
   if (tx.type !== "expense" || isInternalTransfer(tx) || isInvestmentTx(tx)) return false;
   const ov = overridesMap[tx.id];
   if (ov) {
-    if (ov.mode === "one-off") return false; // El usuario lo desmarcó explícitamente
+    if (ov.mode === "one-off") return false;
     if (ov.mode === "installments") {
       const inst = parseInstallmentInfo(tx, overridesMap);
       return isInstallmentStillActive(tx, inst, refDate);
@@ -199,8 +194,6 @@ const isEffectiveFixedTx = (tx, overridesMap = {}, refDate = new Date()) => {
   });
 };
 
-// Agrupa conceptos fijos equivalentes (ej: "Calis", "Calistenia - Mes de agosto", "Entrenamiento")
-// para que no se sumen triplicados en "Compromisos Fijos del Mes"
 const getCommitmentGroupKey = tx => {
   const d = cleanDisplayDescription(tx.description || "").toLowerCase();
   if (["calis", "calistenia", "entrenamiento", "gimnasio", "gym"].some(k => d.includes(k))) {
@@ -212,7 +205,6 @@ const getCommitmentGroupKey = tx => {
   return d.replace(/mes\s+de\s+\w+/g, "").replace(/\d+/g, "").trim() || d;
 };
 
-// Parsea si un gasto tiene formato de cuenta dividida:
 const parseSplitInfo = tx => {
   const desc = tx.description || "";
   const match = desc.match(/\[Mi parte:\s*\$(\d+(?:\.\d+)?)\s*\|\s*Me deben:\s*\$(\d+(?:\.\d+)?)(?:\s*\(([^)]+)\))?\]/i);
@@ -226,7 +218,6 @@ const parseSplitInfo = tx => {
   };
 };
 
-// Limpia etiquetas internas ([Cuota X/Y], [Puntual], [Mi parte...]) para mostrar prolijo en pantalla
 function cleanDisplayDescription(desc = "") {
   return desc
     .replace(/\[Mi parte:\s*\$\d+(?:\.\d+)?\s*\|\s*Me deben:\s*\$\d+(?:\.\d+)?(?:\s*\([^)]+\))?\]/gi, "")
@@ -283,42 +274,94 @@ function useSlotMachine(target, duration = 1100) {
   return state;
 }
 
-/* ─── Component: SwipeableRow ─────────────────────────────── */
-function SwipeableRow({ id, onDeleteRequest, children }) {
-  const [swipeX, setSwipeX]   = useState(0);
-  const [opened, setOpened]   = useState(false);
+/* ─── Component: SwipeableRow ────────────────────────────────
+   En celular: deslizar a la izquierda revela los DOS botones:
+   1) Editar (violeta) y 2) Eliminar (rojo).
+   En desktop: los botones están ocultos y solo se despliegan
+   cuando acercás el mouse al lado derecho de esa fila individual.
+─────────────────────────────────────────────────────────── */
+function SwipeableRow({ tx, canEdit = true, onEditRequest, onDeleteRequest, children }) {
+  const [swipeX, setSwipeX] = useState(0);
+  const [opened, setOpened] = useState(false);
   const startX = useRef(0);
+  const startY = useRef(0);
   const moving = useRef(false);
-  const PANEL  = 76;
-  const THRESH = 50;
+
+  const BTN_W  = 68;
+  const PANEL  = canEdit ? BTN_W * 2 : BTN_W; // 136px si tiene Editar + Eliminar, 68px si solo Eliminar
+  const THRESH = 45;
 
   const onTouchStart = e => {
     startX.current = e.touches[0].clientX;
+    startY.current = e.touches[0].clientY;
     moving.current = true;
   };
   const onTouchMove = e => {
     if (!moving.current) return;
-    const diff = startX.current - e.touches[0].clientX;
-    if (diff > 0) setSwipeX(Math.min(diff, PANEL));
-    else if (opened) setSwipeX(Math.max(PANEL + diff, 0));
+    const diffX = startX.current - e.touches[0].clientX;
+    const diffY = Math.abs(startY.current - e.touches[0].clientY);
+    // Si el usuario está scrolleando verticalmente, no interferir
+    if (diffY > Math.abs(diffX) && !opened) return;
+
+    if (diffX > 0) {
+      setSwipeX(Math.min(opened ? PANEL : diffX, PANEL));
+    } else if (opened) {
+      setSwipeX(Math.max(PANEL + diffX, 0));
+    }
   };
   const onTouchEnd = () => {
     moving.current = false;
-    if (swipeX > THRESH) { setSwipeX(PANEL); setOpened(true); }
-    else                  { setSwipeX(0);     setOpened(false); }
+    if (swipeX > THRESH) {
+      setSwipeX(PANEL);
+      setOpened(true);
+    } else {
+      setSwipeX(0);
+      setOpened(false);
+    }
   };
 
   return (
     <div style={{position:"relative", overflow:"hidden"}}>
-      <div style={{position:"absolute", right:0, top:0, bottom:0, width:PANEL,
-          background:"#DC2626", display:"flex", alignItems:"center", justifyContent:"center",
-          cursor:"pointer"}}
-           onClick={() => { setSwipeX(0); setOpened(false); onDeleteRequest(id); }}>
-        <Trash2 size={19} color="#fff"/>
+      {/* Panel trasero para celular con los 2 botones: Editar y Eliminar */}
+      <div style={{
+        position:"absolute", right:0, top:0, bottom:0, width:PANEL,
+        display:"flex", alignItems:"stretch", zIndex:1
+      }}>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => { setSwipeX(0); setOpened(false); onEditRequest && onEditRequest(tx); }}
+            style={{
+              width:BTN_W, background:"#4F46E5", border:"none", color:"#fff",
+              display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+              gap:3, cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:700
+            }}>
+            <Edit3 size={17} color="#fff"/>
+            <span>Editar</span>
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => { setSwipeX(0); setOpened(false); onDeleteRequest && onDeleteRequest(tx.id); }}
+          style={{
+            width:BTN_W, background:"#DC2626", border:"none", color:"#fff",
+            display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+            gap:3, cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:700
+          }}>
+          <Trash2 size={17} color="#fff"/>
+          <span>Borrar</span>
+        </button>
       </div>
-      <div style={{transform:`translateX(-${swipeX}px)`,
-          transition: moving.current ? "none" : "transform .25s ease-out"}}
-           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+
+      {/* Contenido deslizable */}
+      <div style={{
+          position:"relative", zIndex:2,
+          transform:`translateX(-${swipeX}px)`,
+          transition: moving.current ? "none" : "transform .25s cubic-bezier(0.16, 1, 0.3, 1)"
+        }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}>
         {children}
       </div>
     </div>
@@ -849,7 +892,7 @@ function AppContent({ session, onLogout }) {
 
   const [tab, setTab]                       = useState("dashboard");
   const [showModal, setShowModal]           = useState(false);
-  const [editingTxId, setEditingTxId]       = useState(null); // ID del movimiento que se está editando
+  const [editingTxId, setEditingTxId]       = useState(null);
   const [savingTx, setSavingTx]             = useState(false);
   const [showLogout, setShowLogout]         = useState(false);
   const [showBanks, setShowBanks]           = useState(false);
@@ -897,7 +940,7 @@ function AppContent({ session, onLogout }) {
   const getInitialForm = useCallback((mode = "expense") => {
     const firstDigital = connectedIds.find(id => id !== "efectivo") || "lemoncash";
     return {
-      type: mode,               // "expense" | "income" | "investment" | "transfer"
+      type: mode,
       amount: "",
       category: mode === "transfer" ? "Transferencia" : "",
       description: "",
@@ -906,7 +949,6 @@ function AppContent({ session, onLogout }) {
       wallet: firstDigital,
       fromWallet: "efectivo",
       toWallet: firstDigital,
-      // Modo de gasto: "one-off" (Puntual), "fixed" (Fijo mensual), "installments" (En cuotas)
       expenseMode: "one-off",
       currentInst: "1",
       totalInst: "3",
@@ -966,7 +1008,6 @@ function AppContent({ session, onLogout }) {
   /* Quitar rápidamente la marca de "Fijo" desde el Dashboard sin borrar el gasto */
   const removeFixedMark = async tx => {
     const groupKey = getCommitmentGroupKey(tx);
-    // Desmarca tanto este registro como otros equivalentes del mismo grupo si existieran
     const nextOverrides = { ...fixedOverrides };
     txs.forEach(item => {
       if (item.id === tx.id || getCommitmentGroupKey(item) === groupKey) {
@@ -1041,9 +1082,6 @@ function AppContent({ session, onLogout }) {
   }).filter(d => d.value > 0).sort((a,b) => b.value - a.value);
   const walletTotal = walletTotals.reduce((s,d)=>s+d.value,0);
 
-  // Compromisos Fijos del Mes:
-  // 1) Filtra los que están activos hoy (excluyendo los quitados manualmente o cuotas ya vencidas)
-  // 2) Ordena del más reciente al más viejo para quedarse siempre con el último precio vigente de cada grupo (ej: último precio de Calistenia)
   const recurringExpenses = realExpenseTxs
     .filter(t => isEffectiveFixedTx(t, fixedOverrides))
     .sort((a,b) => b.date.localeCompare(a.date));
@@ -1059,7 +1097,6 @@ function AppContent({ session, onLogout }) {
     .sort((a,b) => (Number(a.dueDay)||99) - (Number(b.dueDay)||99));
   const monthlyCommitted = uniqueRecurring.reduce((s,t) => s + getEffectiveExpense(t), 0);
 
-  // Cuentas divididas pendientes
   const pendingSplits = txs
     .map(tx => {
       const sp = parseSplitInfo(tx);
@@ -1106,7 +1143,6 @@ function AppContent({ session, onLogout }) {
   /* ── Actions ── */
   const showToast = (msg,ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),3000); };
 
-  // Auto-detección al escribir descripción (solo cuando se crea un movimiento nuevo)
   const handleDescriptionChange = val => {
     if (editingTxId) {
       setForm(f => ({ ...f, description: val }));
@@ -1130,12 +1166,10 @@ function AppContent({ session, onLogout }) {
     });
   };
 
-  /* Guardar nuevo movimiento O Guardar edición de movimiento existente */
   const saveOrUpdateTx = async () => {
     const totalAmt = parseFloat(form.amount);
     if (!totalAmt || totalAmt <= 0 || savingTx) return;
 
-    // ── CASO A: TRANSFERENCIA ENTRE BILLETERAS ──
     if (form.type === "transfer") {
       if (form.fromWallet === form.toWallet) {
         showToast("Elegí dos billeteras distintas", false);
@@ -1206,14 +1240,12 @@ function AppContent({ session, onLogout }) {
       finalDesc = `[Inversión] ${finalDesc}`;
     }
 
-    // Si es gasto en cuotas, agrega etiqueta [Cuota X/Y]
     if (form.type === "expense" && form.expenseMode === "installments") {
       const cInst = Math.max(1, parseInt(form.currentInst, 10) || 1);
       const tInst = Math.max(cInst, parseInt(form.totalInst, 10) || 3);
       finalDesc = `${finalDesc} [Cuota ${cInst}/${tInst}]`;
     }
 
-    // Si es gasto compartido ("Dividir cuenta / Me deben")
     if (form.type === "expense" && form.isSplit) {
       const myShareNum = parseFloat(form.myShare) || 0;
       const owedNum    = Math.max(0, totalAmt - myShareNum);
@@ -1243,7 +1275,6 @@ function AppContent({ session, onLogout }) {
       let savedId = editingTxId;
 
       if (editingTxId) {
-        // Si txApi tiene método update lo usa; si no, crea el registro actualizado y elimina el viejo
         if (typeof txApi.update === "function") {
           const res = await txApi.update(editingTxId, payload);
           savedId = res?.transaction?.id || editingTxId;
@@ -1261,7 +1292,6 @@ function AppContent({ session, onLogout }) {
         setTxs(p => [newTx, ...p]);
       }
 
-      // Guardamos la preferencia explícita de Fijo / Puntual / Cuotas en localStorage
       if (form.type === "expense") {
         const nextOv = { ...fixedOverrides };
         if (editingTxId && editingTxId !== savedId) delete nextOv[editingTxId];
@@ -1358,11 +1388,64 @@ function AppContent({ session, onLogout }) {
       background:none;color:#475569;transition:all .2s;white-space:nowrap;}
     .tab-btn:hover{color:#94A3B8;}
     .tab-active{background:rgba(99,102,241,.15)!important;color:#818CF8!important;border-color:rgba(99,102,241,.3)!important;}
-    .tx-wrap:hover .tx-del-btn{opacity:1;}
-    .tx-del-btn{opacity:.45;transition:opacity .2s;}
-    .tx-del-btn:hover{opacity:1!important;}
     .tx-row{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #1E293B;background:#0F172A;}
     .tx-row:last-child{border-bottom:none;}
+
+    /* ── Zona derecha individual con despliegue suave de botones solo al acercar el mouse ── */
+    .tx-right-zone{
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      flex-shrink:0;
+      padding:6px 0 6px 24px;
+      margin:-6px 0 -6px -24px;
+    }
+    .tx-actions-drawer{
+      display:flex;
+      align-items:center;
+      gap:4px;
+      max-width:0;
+      opacity:0;
+      overflow:hidden;
+      margin-left:0;
+      pointer-events:none;
+      transform:translateX(8px);
+      transition:max-width .22s cubic-bezier(0.16,1,0.3,1), opacity .18s ease, margin-left .22s ease, transform .22s ease;
+    }
+    /* Solo se despliega en dispositivos con cursor cuando te acercás al lado derecho de ese movimiento */
+    @media(hover:hover) and (pointer:fine){
+      .tx-right-zone:hover .tx-actions-drawer{
+        max-width:76px;
+        opacity:1;
+        margin-left:8px;
+        pointer-events:auto;
+        transform:translateX(0);
+      }
+    }
+    /* En celular/táctil nunca se muestran los íconos en línea (se usa el swipe a la izquierda) */
+    @media(hover:none),(pointer:coarse),(max-width:719px){
+      .tx-actions-drawer{
+        display:none!important;
+      }
+    }
+    .tx-act-btn{
+      width:28px;
+      height:28px;
+      border-radius:8px;
+      border:1px solid transparent;
+      background:rgba(30,41,59,.9);
+      cursor:pointer;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex-shrink:0;
+      transition:all .15s ease;
+    }
+    .tx-act-edit{color:#818CF8;border-color:rgba(99,102,241,.25);}
+    .tx-act-edit:hover{background:rgba(99,102,241,.2);border-color:rgba(99,102,241,.45);}
+    .tx-act-del{color:#F472B6;border-color:rgba(244,114,182,.25);}
+    .tx-act-del:hover{background:rgba(244,114,182,.2);border-color:rgba(244,114,182,.45);}
+
     .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;}
     .input-fc{width:100%;background:#1E293B;border:1px solid #334155;border-radius:12px;
       padding:12px 16px;font-size:14px;color:#F1F5F9;outline:none;font-family:inherit;transition:border-color .2s;}
@@ -1746,13 +1829,13 @@ function AppContent({ session, onLogout }) {
                 </div>
               </div>
 
-              {/* Compromisos Fijos del Mes (con edición directa, baja de marca fijo y control de cuotas) */}
+              {/* Compromisos Fijos del Mes */}
               <div className="card">
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
                   <div>
                     <p style={{fontSize:13,fontWeight:700}}>Compromisos Fijos del Mes</p>
                     <p style={{fontSize:11,color:"#64748B",marginTop:3}}>
-                      Agrupa duplicados y descuenta cuotas vencidas · podés editar (✏️) o quitar de fijos (✕)
+                      Acercate al monto (PC) o deslizá a la izquierda (celu) para editar o quitar de fijos
                     </p>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
@@ -1772,60 +1855,69 @@ function AppContent({ session, onLogout }) {
                         const soon = isDueSoon(tx.dueDay);
                         const inst = parseInstallmentInfo(tx, fixedOverrides);
                         return (
-                          <div key={tx.id} style={{display:"flex",alignItems:"center",gap:10,
-                              background: soon?"rgba(251,191,36,.06)":"#1E293B",
-                              border: soon?"1px solid rgba(251,191,36,.25)":"1px solid transparent",
-                              borderRadius:11,padding:"10px 12px"}}>
-                            <div style={{width:30,height:30,borderRadius:8,background:m.color+"20",
-                                display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                              <I size={13} color={m.color}/>
-                            </div>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                <p style={{fontSize:12,fontWeight:600,color:"#CBD5E1",overflow:"hidden",
-                                    textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                  {cleanDisplayDescription(tx.description)}
-                                </p>
-                                {soon && <AlertTriangle size={11} color="#FBBF24"/>}
+                          <div key={tx.id} style={{borderRadius:11,overflow:"hidden",
+                              border: soon?"1px solid rgba(251,191,36,.25)":"1px solid transparent"}}>
+                            <SwipeableRow
+                              tx={tx}
+                              canEdit={true}
+                              onEditRequest={openEditModal}
+                              onDeleteRequest={() => removeFixedMark(tx)}
+                            >
+                              <div style={{display:"flex",alignItems:"center",gap:10,
+                                  background: soon?"rgba(251,191,36,.06)":"#1E293B",
+                                  padding:"10px 12px"}}>
+                                <div style={{width:30,height:30,borderRadius:8,background:m.color+"20",
+                                    display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  <I size={13} color={m.color}/>
+                                </div>
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                    <p style={{fontSize:12,fontWeight:600,color:"#CBD5E1",overflow:"hidden",
+                                        textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                      {cleanDisplayDescription(tx.description)}
+                                    </p>
+                                    {soon && <AlertTriangle size={11} color="#FBBF24"/>}
+                                  </div>
+                                  <p style={{fontSize:10,color:"#475569",marginTop:1}}>
+                                    {tx.category} · {fDate(tx.date)}
+                                    {tx.dueDay ? <span style={{color:soon?"#FBBF24":"#64748B"}}> · vence día {tx.dueDay}</span> : ""}
+                                  </p>
+                                </div>
+                                {/* Zona derecha individual: solo muestra íconos al acercar el cursor ahí */}
+                                <div className="tx-right-zone">
+                                  <div style={{textAlign:"right"}}>
+                                    <p style={{fontSize:13,fontWeight:700,color:"#FBBF24"}}>-{fARS(getEffectiveExpense(tx))}</p>
+                                    {inst ? (
+                                      <p style={{fontSize:9,fontWeight:700,color:"#38BDF8",background:"rgba(56,189,248,.12)",
+                                          borderRadius:5,padding:"1px 6px",marginTop:2,display:"inline-block"}}>
+                                        💳 Cuota {inst.current}/{inst.total}
+                                      </p>
+                                    ) : (
+                                      <p style={{fontSize:9,fontWeight:600,color:"#FBBF24",background:"rgba(251,191,36,.12)",
+                                          borderRadius:5,padding:"1px 5px",marginTop:2,display:"inline-block"}}>
+                                        📅 fijo
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="tx-actions-drawer">
+                                    <button
+                                      type="button"
+                                      className="tx-act-btn tx-act-edit"
+                                      onClick={() => openEditModal(tx)}
+                                      title="Editar gasto (categoría, cuotas, monto…)">
+                                      <Edit3 size={13}/>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="tx-act-btn tx-act-del"
+                                      onClick={() => removeFixedMark(tx)}
+                                      title="Quitar de gastos fijos (mantiene el gasto en tu historial)">
+                                      <CalendarOff size={13}/>
+                                    </button>
+                                  </div>
+                                </div>
                               </div>
-                              <p style={{fontSize:10,color:"#475569",marginTop:1}}>
-                                {tx.category} · {fDate(tx.date)}
-                                {tx.dueDay ? <span style={{color:soon?"#FBBF24":"#64748B"}}> · vence día {tx.dueDay}</span> : ""}
-                              </p>
-                            </div>
-                            <div style={{flexShrink:0,textAlign:"right",marginRight:4}}>
-                              <p style={{fontSize:13,fontWeight:700,color:"#FBBF24"}}>-{fARS(getEffectiveExpense(tx))}</p>
-                              {inst ? (
-                                <p style={{fontSize:9,fontWeight:700,color:"#38BDF8",background:"rgba(56,189,248,.12)",
-                                    borderRadius:5,padding:"1px 6px",marginTop:2,display:"inline-block"}}>
-                                  💳 Cuota {inst.current}/{inst.total}
-                                </p>
-                              ) : (
-                                <p style={{fontSize:9,fontWeight:600,color:"#FBBF24",background:"rgba(251,191,36,.12)",
-                                    borderRadius:5,padding:"1px 5px",marginTop:2,display:"inline-block"}}>
-                                  📅 fijo
-                                </p>
-                              )}
-                            </div>
-                            {/* Botones de acción directa: Editar gasto / Quitar solo marca de fijo */}
-                            <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                              <button
-                                onClick={() => openEditModal(tx)}
-                                title="Editar gasto (categoría, cuotas, monto…)"
-                                style={{width:26,height:26,borderRadius:7,background:"rgba(99,102,241,.14)",
-                                  border:"1px solid rgba(99,102,241,.3)",color:"#818CF8",cursor:"pointer",
-                                  display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                <Edit3 size={12}/>
-                              </button>
-                              <button
-                                onClick={() => removeFixedMark(tx)}
-                                title="Quitar de gastos fijos (mantiene el gasto en tu historial)"
-                                style={{width:26,height:26,borderRadius:7,background:"rgba(244,114,182,.12)",
-                                  border:"1px solid rgba(244,114,182,.25)",color:"#F472B6",cursor:"pointer",
-                                  display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                <CalendarOff size={12}/>
-                              </button>
-                            </div>
+                            </SwipeableRow>
                           </div>
                         );
                       })}
@@ -1869,28 +1961,49 @@ function AppContent({ session, onLogout }) {
                       const isInv   = isInvestmentTx(tx);
                       const split   = parseSplitInfo(tx);
                       return (
-                        <div key={tx.id} className="tx-row">
-                          <TxIcon tx={tx}/>
-                          <div style={{flex:1,minWidth:0}}>
-                            <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              {split ? split.cleanDesc : cleanDisplayDescription(tx.description)}
-                            </p>
-                            <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
-                              {isTrans ? "Transferencia interna" : isInv ? "Inversión / Ahorro" : tx.category} · {fDate(tx.date)}
-                            </p>
-                          </div>
-                          <span style={{fontSize:13,fontWeight:700,flexShrink:0,
-                              color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
-                            {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
-                          </span>
-                          {!isTrans && (
-                            <button
-                              onClick={() => openEditModal(tx)}
-                              title="Editar movimiento"
-                              style={{background:"none",border:"none",cursor:"pointer",color:"#64748B",padding:4,display:"flex"}}>
-                              <Edit3 size={13}/>
-                            </button>
-                          )}
+                        <div key={tx.id} style={{borderBottom:"1px solid #1E293B"}}>
+                          <SwipeableRow
+                            tx={tx}
+                            canEdit={!isTrans}
+                            onEditRequest={openEditModal}
+                            onDeleteRequest={confirmDelete}
+                          >
+                            <div className="tx-row">
+                              <TxIcon tx={tx}/>
+                              <div style={{flex:1,minWidth:0}}>
+                                <p style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                  {split ? split.cleanDesc : cleanDisplayDescription(tx.description)}
+                                </p>
+                                <p style={{fontSize:11,color:"#64748B",marginTop:2}}>
+                                  {isTrans ? "Transferencia interna" : isInv ? "Inversión / Ahorro" : tx.category} · {fDate(tx.date)}
+                                </p>
+                              </div>
+                              <div className="tx-right-zone">
+                                <span style={{fontSize:13,fontWeight:700,
+                                    color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
+                                  {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
+                                </span>
+                                <div className="tx-actions-drawer">
+                                  {!isTrans && (
+                                    <button
+                                      type="button"
+                                      className="tx-act-btn tx-act-edit"
+                                      onClick={() => openEditModal(tx)}
+                                      title="Editar movimiento">
+                                      <Edit3 size={13}/>
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="tx-act-btn tx-act-del"
+                                    onClick={() => confirmDelete(tx.id)}
+                                    title="Eliminar movimiento">
+                                    <Trash2 size={13}/>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </SwipeableRow>
                         </div>
                       );
                     })}
@@ -2145,8 +2258,13 @@ function AppContent({ session, onLogout }) {
                         const inst    = parseInstallmentInfo(tx, fixedOverrides);
                         const split   = parseSplitInfo(tx);
                         return (
-                          <div key={tx.id} className="tx-wrap" style={{borderBottom:"1px solid #1E293B"}}>
-                            <SwipeableRow id={tx.id} onDeleteRequest={confirmDelete}>
+                          <div key={tx.id} style={{borderBottom:"1px solid #1E293B"}}>
+                            <SwipeableRow
+                              tx={tx}
+                              canEdit={!isTrans}
+                              onEditRequest={openEditModal}
+                              onDeleteRequest={confirmDelete}
+                            >
                               <div className="tx-row">
                                 <TxIcon tx={tx}/>
                                 <div style={{flex:1,minWidth:0}}>
@@ -2199,27 +2317,30 @@ function AppContent({ session, onLogout }) {
                                     )}
                                   </div>
                                 </div>
-                                <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                                {/* Zona derecha individual: oculta por defecto, se despliega al acercar el mouse */}
+                                <div className="tx-right-zone">
                                   <span style={{fontSize:13,fontWeight:700,
                                       color: isTrans ? "#38BDF8" : isInv ? "#A78BFA" : tx.type==="income"?"#34D399":"#F472B6"}}>
                                     {tx.type==="income"?"+":"-"}{fARS(tx.amount)}
                                   </span>
-                                  {/* Botón Editar */}
-                                  {!isTrans && (
-                                    <button className="tx-del-btn" onClick={()=>openEditModal(tx)}
-                                      title="Editar movimiento"
-                                      style={{background:"none",border:"none",cursor:"pointer",
-                                          color:"#818CF8",padding:"4px",borderRadius:6,display:"flex"}}>
-                                      <Edit3 size={13}/>
+                                  <div className="tx-actions-drawer">
+                                    {!isTrans && (
+                                      <button
+                                        type="button"
+                                        className="tx-act-btn tx-act-edit"
+                                        onClick={()=>openEditModal(tx)}
+                                        title="Editar movimiento">
+                                        <Edit3 size={13}/>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="tx-act-btn tx-act-del"
+                                      onClick={()=>confirmDelete(tx.id)}
+                                      title="Eliminar movimiento">
+                                      <Trash2 size={13}/>
                                     </button>
-                                  )}
-                                  {/* Botón Eliminar */}
-                                  <button className="tx-del-btn" onClick={()=>confirmDelete(tx.id)}
-                                    title="Eliminar movimiento"
-                                    style={{background:"none",border:"none",cursor:"pointer",
-                                        color:"#F472B6",padding:"4px",borderRadius:6,display:"flex"}}>
-                                    <Trash2 size={13}/>
-                                  </button>
+                                  </div>
                                 </div>
                               </div>
                             </SwipeableRow>
@@ -2361,7 +2482,7 @@ function AppContent({ session, onLogout }) {
               </div>
               <h3 style={{fontSize:16,fontWeight:700,marginBottom:6}}>¿Eliminar movimiento?</h3>
               <p style={{fontSize:13,color:"#64748B",lineHeight:1.5}}>
-                Esta acción borrará el registro completo. Si solo querés quitarlo de fijos, usá el botón ✏️ o ✕.
+                Esta acción borrará el registro completo. Si solo querés quitarlo de fijos, usá el botón de editar.
               </p>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -2738,7 +2859,7 @@ function AppContent({ session, onLogout }) {
                   </div>
                 )}
 
-                {/* 3 Modos de Gasto: Puntual / Fijo mensual / En cuotas (con límite de meses) */}
+                {/* 3 Modos de Gasto: Puntual / Fijo mensual / En cuotas */}
                 {form.type==="expense" && (
                   <div style={{marginBottom: form.expenseMode !== "one-off" ? 14 : 20}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
@@ -2782,7 +2903,7 @@ function AppContent({ session, onLogout }) {
                   </div>
                 )}
 
-                {/* Selector de Cuota Actual y Total de Cuotas (Ej: Cuota 2 de 3) */}
+                {/* Selector de Cuota Actual y Total de Cuotas */}
                 {form.type === "expense" && form.expenseMode === "installments" && (
                   <div style={{marginBottom:14,padding:13,borderRadius:13,background:"rgba(56,189,248,.08)",
                       border:"1px solid rgba(56,189,248,.3)",animation:"fu .2s ease-out both"}}>
